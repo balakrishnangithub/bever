@@ -1,0 +1,55 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [5 0 R 7 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 184 >>
+stream
+BT /F2 24 Tf 72 730 Td (Bever local PDF preview) Tj ET
+BT /F1 14 Tf 72 690 Td (Page 1 of 2) Tj ET
+BT /F1 14 Tf 72 650 Td (This public sample is rendered entirely on your device.) Tj ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 184 >>
+stream
+BT /F2 24 Tf 72 730 Td (Bever local PDF preview) Tj ET
+BT /F1 14 Tf 72 690 Td (Page 2 of 2) Tj ET
+BT /F1 14 Tf 72 650 Td (This public sample is rendered entirely on your device.) Tj ET
+endstream
+endobj
+9 0 obj
+<< /Title (Bever local PDF preview) >>
+endobj
+xref
+0 10
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000121 00000 n 
+0000000191 00000 n 
+0000000266 00000 n 
+0000000402 00000 n 
+0000000637 00000 n 
+0000000773 00000 n 
+0000001008 00000 n 
+trailer
+<< /Size 10 /Root 1 0 R /Info 9 0 R >>
+startxref
+1062
+%%EOF

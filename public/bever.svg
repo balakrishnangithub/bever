@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title id="title">Bever</title>
+  <rect width="128" height="128" rx="30" fill="#a3501e"/>
+  <clipPath id="scales">
+    <path d="M-22 0C-19-10-4-18.500 9-18.500 20.500-18.500 28-10 28 0 28 10 20.500 18.500 9 18.500-4 18.500-19 10-22 0Z"/>
+  </clipPath>
+  <path d="M38 13 53 39V98a10 10 0 0 1-10 10H33a10 10 0 0 1-10-10V39Z" fill="#fff4e2"/>
+  <path d="M38 13 45.500 26H30.500Z" fill="#3a2418"/>
+  <g transform="translate(74 79) rotate(-34)">
+    <path d="M-34 0C-30-14-8-27 10-27 26-27 37-15 37 0 37 15 26 27 10 27-8 27-30 14-34 0Z" fill="#fff4e2"/>
+    <g clip-path="url(#scales)" stroke="#a3501e" stroke-width="2.600" stroke-linecap="round">
+      <path d="M-30-6-12-24M-28 6 2-24M-20 12 16-24M-8 14 28-22M4 16 32-12M16 18 34 0M26 22 36 12"/>
+      <path d="M-30 6-12 24M-28-6 2 24M-20-12 16 24M-8-14 28 22M4-16 32 12M16-18 34 0M26-22 36-12"/>
+    </g>
+  </g>
+</svg>

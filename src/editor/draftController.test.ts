@@ -1,0 +1,189 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import type { Note, SaveNote } from '../types';
+import { DraftController } from './draftController';
+
+const note = (overrides: Partial<Note> = {}): Note => ({
+  id: 'note-1',
+  notebookId: 'inbox',
+  title: 'Title',
+  contentHtml: '<p>Stored</p>',
+  originalEnml: null,
+  plainText: 'Stored',
+  createdAt: 1,
+  updatedAt: 1,
+  deletedAt: null,
+  attributes: {},
+  evernoteGuid: null,
+  revision: 5,
+  tags: ['one'],
+  resources: [],
+  ...overrides,
+});
+
+/** A stand-in for the library: stores what it is given, one revision later. */
+function library(start = note()) {
+  let stored = start;
+  const saves: SaveNote[] = [];
+  let release: (() => void) | null = null;
+  let hold = false;
+  return {
+    saves,
+    get stored() {
+      return stored;
+    },
+    /** Makes the next save wait until `finish()` is called. */
+    holdNextSave() {
+      hold = true;
+    },
+    finish() {
+      release?.();
+    },
+    persist: async (input: SaveNote, beforeApply: (note: Note) => void) => {
+      saves.push(input);
+      if (hold) {
+        hold = false;
+        await new Promise<void>((resolve) => (release = resolve));
+      }
+      stored = { ...stored, ...input, revision: stored.revision + 1 };
+      beforeApply(stored);
+    },
+  };
+}
+
+describe('DraftController', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('saves a short while after the last edit, with the revision it started from', async () => {
+    const backend = library();
+    const controller = new DraftController(note(), backend.persist, 650);
+    controller.update('contentHtml', '<p>A</p>');
+    controller.update('contentHtml', '<p>AB</p>');
+    await vi.advanceTimersByTimeAsync(649);
+    expect(backend.saves).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(backend.saves).toHaveLength(1);
+    expect(backend.saves[0]).toMatchObject({ id: 'note-1', contentHtml: '<p>AB</p>', baseRevision: 5 });
+    expect(controller.getSnapshot()).toMatchObject({ dirty: false, saveState: 'saved' });
+  });
+
+  it('flush saves at once, so nothing typed is lost when the note is left', async () => {
+    const backend = library();
+    const controller = new DraftController(note(), backend.persist, 650);
+    controller.update('title', 'Typed just before switching');
+    await controller.flush();
+    expect(backend.stored.title).toBe('Typed just before switching');
+    expect(controller.isDirty).toBe(false);
+    // The timer that was pending does not save a second time.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(backend.saves).toHaveLength(1);
+    // And with nothing to save, flush does nothing.
+    await controller.flush();
+    expect(backend.saves).toHaveLength(1);
+  });
+
+  it('never overlaps saves and bases each on the revision of the one before', async () => {
+    const backend = library();
+    const controller = new DraftController(note(), backend.persist, 650);
+    controller.update('contentHtml', '<p>first</p>');
+    backend.holdNextSave();
+    const first = controller.flush();
+    await Promise.resolve();
+    controller.update('contentHtml', '<p>second</p>');
+    const second = controller.flush();
+    await Promise.resolve();
+    expect(backend.saves).toHaveLength(1);
+    backend.finish();
+    await Promise.all([first, second]);
+    expect(backend.saves.map((save) => [save.contentHtml, save.baseRevision])).toEqual([
+      ['<p>first</p>', 5],
+      ['<p>second</p>', 6],
+    ]);
+    expect(backend.stored.contentHtml).toBe('<p>second</p>');
+    expect(controller.getSnapshot()).toMatchObject({ dirty: false, saveState: 'saved' });
+  });
+
+  it('reports a failed save and keeps the edits for the next attempt', async () => {
+    let fail = true;
+    const backend = library();
+    const controller = new DraftController(
+      note(),
+      async (input, beforeApply) => {
+        if (fail) throw new Error('disk full');
+        await backend.persist(input, beforeApply);
+      },
+      650,
+    );
+    controller.update('title', 'Kept');
+    await expect(controller.flush()).rejects.toThrow('disk full');
+    expect(controller.getSnapshot()).toMatchObject({ dirty: true, saveState: 'error' });
+    fail = false;
+    await controller.flush();
+    expect(backend.stored.title).toBe('Kept');
+    expect(controller.getSnapshot()).toMatchObject({ dirty: false, saveState: 'saved' });
+  });
+
+  it("does not treat the result of its own save as someone else's change", async () => {
+    const backend = library();
+    const controller = new DraftController(note(), backend.persist, 650);
+    controller.update('contentHtml', '<p>mine</p>');
+    await controller.flush();
+    const before = controller.getSnapshot();
+    controller.noteChanged(backend.stored);
+    expect(controller.getSnapshot()).toBe(before);
+  });
+
+  it('follows a change from outside when there is nothing unsaved', () => {
+    const controller = new DraftController(note(), library().persist, 650);
+    controller.noteChanged(note({ revision: 9, contentHtml: '<p>From another device</p>', tags: ['two'] }));
+    expect(controller.getSnapshot()).toMatchObject({
+      dirty: false,
+      contentVersion: 1,
+      draft: { contentHtml: '<p>From another device</p>', tags: ['two'] },
+    });
+  });
+
+  it('keeps typed content over a change from outside and saves against the new revision', async () => {
+    const backend = library();
+    const controller = new DraftController(note(), backend.persist, 650);
+    controller.update('contentHtml', '<p>typed here</p>');
+    // A tag was added from the note list, and the note moved, meanwhile.
+    controller.noteChanged(note({ revision: 6, notebookId: 'work', tags: ['one', 'added'] }));
+    expect(controller.getSnapshot()).toMatchObject({
+      dirty: true,
+      contentVersion: 0,
+      draft: { contentHtml: '<p>typed here</p>', notebookId: 'work', tags: ['one', 'added'] },
+    });
+    await controller.flush();
+    expect(backend.saves[0]).toMatchObject({ baseRevision: 6, tags: ['one', 'added'], notebookId: 'work' });
+  });
+
+  it('adopts changes the editor made itself, such as adding an attachment', async () => {
+    const backend = library();
+    const controller = new DraftController(note(), backend.persist, 650);
+    const withAttachment = note({ revision: 6 });
+    controller.adopt(withAttachment);
+    const before = controller.getSnapshot();
+    controller.noteChanged(withAttachment);
+    expect(controller.getSnapshot()).toBe(before);
+    controller.update('contentHtml', '<p>with <en-media hash="x"></en-media></p>');
+    await controller.flush();
+    expect(backend.saves[0]?.baseRevision).toBe(6);
+  });
+
+  it('notifies subscribers and stops after dispose', async () => {
+    const backend = library();
+    const controller = new DraftController(note(), backend.persist, 650);
+    const listener = vi.fn();
+    const unsubscribe = controller.subscribe(listener);
+    controller.update('title', 'x');
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+    controller.update('title', 'xy');
+    expect(listener).toHaveBeenCalledTimes(1);
+    controller.dispose();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(backend.saves).toHaveLength(0);
+  });
+});

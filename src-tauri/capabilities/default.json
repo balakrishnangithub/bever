@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The WebView renders imported note content, so it is given only Tauri's core permissions (events and window basics). It has no file-system, dialog, or opener permission: files are chosen in native dialogs opened from Rust, and links are opened by a command that checks their scheme.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

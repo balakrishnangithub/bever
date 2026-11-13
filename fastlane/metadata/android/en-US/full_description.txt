@@ -1,0 +1,18 @@
+Bever is a free, open-source note application that keeps everything on your device: notes, attachments, and the search index. There is no account, no telemetry, no advertising, and no application server.
+
+<b>Notes</b>
+• Notebooks, notebook stacks, tags, shortcuts, and a trash
+• Rich text, tables, checklists, code blocks, and links between notes
+• Pictures, audio, video, and PDF pages shown in the note
+• Annotations on pictures, and sketches that stay editable stroke by stroke
+
+<b>Search</b>
+• Offline full-text search with operators such as tag:, notebook:, and created:
+• Finds text inside pictures and marks it where it stands
+• Optional on-device text recognition; nothing is sent anywhere
+
+<b>Your notes are yours</b>
+• Imports and exports ENEX files without loss, so a library kept in Evernote can be brought along
+• Optional synchronization through your own pCloud storage, started by you. pCloud is a proprietary service, and the remote copy is not end-to-end encrypted
+
+Bever is an independent project and is not affiliated with Evernote or pCloud.

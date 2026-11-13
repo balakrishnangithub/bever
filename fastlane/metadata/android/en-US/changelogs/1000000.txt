@@ -1,0 +1,1 @@
+The first release of Bever: local-first notes with rich text, pictures, annotations, sketches, nested tags, offline search that also finds text in pictures and forgives a misspelt word, ENEX import and export, and optional pCloud synchronization.

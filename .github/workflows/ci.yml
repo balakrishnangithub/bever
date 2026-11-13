@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # The reusable core and the interface, on both platforms they must build on.
+  core-and-frontend:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run lint:web
+      - run: npm test
+      - run: cargo test -p bever-core
+      - run: cargo clippy -p bever-core --all-targets -- -D warnings
+      - run: npm run build
+
+  # The native shell, and the interface driven in a real browser.
+  windows-native:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # The shell embeds the built interface, so it is built first.
+      - run: npm run build
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test -p bever
+      - run: node tests/visual-check.mjs
