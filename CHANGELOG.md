@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.1.1 — 2026-11-14
+
+Two of the libraries Bever is built from are brought up to versions with no known vulnerability. Nothing else changes.
+
+### Security
+
+The Rust dependencies were checked against the RustSec advisory database (`cargo audit`), which 1.1.0 had not been able to do. The check named three advisories, and now names none.
+
+- **SQLite 3.54.1** in place of 3.50.2. SQLite before 3.54.0 can give back stale memory of the program when it opens a database together with a write-ahead log made for the purpose (CVE-2026-119375, RUSTSEC-2026-0459). Bever opens its own library and, for an import from Evernote on the same computer, Evernote's files. Both are in the user's own folders, so making use of this took access that already gave more.
+- **The XML reader `quick-xml` 0.42** in place of 0.38. Two advisories stand against the older version (RUSTSEC-2026-0194, RUSTSEC-2026-0195): a start tag with very many attributes or namespace declarations could take a long time or much memory. Bever's reading of ENEX did not get to either. It does not resolve namespaces, and 1.1.0 reads an export that has 300,000 attributes on one tag in a tenth of a second.
+
+The check still warns of six crates as unmaintained or unsound, none with a known vulnerability. Five belong to the Linux desktop and are not in the Windows or the Android application. The sixth, `fxhash`, is used by the HTML parser.
+
+### Compatibility
+
+- **1.1.1 and 1.1.0 work on the same library and synchronize with each other.** The library, the synchronized folder and the settings are as 1.1.0 left them; nothing is converted.
+- **Exports are read as before,** also one with bytes that are not UTF-8, which is imported with "�" where they were. The newer XML reader stops at such bytes, so they are replaced before it reads them.
+- For those building on `bever-core`: it depends on `quick-xml` 0.42 and `rusqlite` 0.42, and `BeverError::Xml` carries the error of the newer `quick-xml`.
+
+### Not verified
+
+- Nothing in this release was run on an Android device; the Android package was built.
+- Synchronization was not run against pCloud this time, since no sign-in was saved on the development machine. Its tests against a stand-in for pCloud pass.
+- The comparisons of speed are from one computer.
+
 ## 1.1.0 — 2026-11-14
 
 ### Added

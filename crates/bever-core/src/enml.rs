@@ -500,7 +500,7 @@ mod tests {
         loop {
             match reader.read_event().expect("ENML must be well-formed XML") {
                 Event::Start(element) | Event::Empty(element) => {
-                    names.push(String::from_utf8_lossy(element.name().as_ref()).into_owned());
+                    names.push(element.name().as_ref().to_owned());
                 }
                 Event::Eof => break,
                 _ => {}

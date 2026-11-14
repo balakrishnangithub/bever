@@ -29,6 +29,7 @@ use crate::{
     error::{BeverError, Result},
     models::{ImportProgress, ImportReport, Note},
     repository::ImportNoteResult,
+    utf8::Utf8Lossy,
 };
 
 /// Note attribute that keeps note-level ENEX elements Bever does not
@@ -208,7 +209,9 @@ struct Capture {
 }
 
 pub struct EnexReader<R: BufRead> {
-    reader: Reader<R>,
+    /// The XML reader takes nothing but UTF-8; a byte that is not becomes
+    /// U+FFFD on the way to it, so that it costs a character and not the file.
+    reader: Reader<Utf8Lossy<R>>,
     buffer: Vec<u8>,
     /// Names of the currently open elements, outermost first.
     path: Vec<String>,
@@ -225,7 +228,7 @@ pub struct EnexReader<R: BufRead> {
 
 impl<R: BufRead> EnexReader<R> {
     pub fn new(reader: R) -> Self {
-        let mut reader = Reader::from_reader(reader);
+        let mut reader = Reader::from_reader(Utf8Lossy::new(reader));
         reader.config_mut().trim_text(false);
         reader.config_mut().check_end_names = true;
         Self {
@@ -298,7 +301,7 @@ impl<R: BufRead> EnexReader<R> {
 
             match event {
                 Event::Start(start) => {
-                    let name = xml_name(start.name().as_ref());
+                    let name = start.name().as_ref().to_owned();
                     if self.is_unmodelled_note_child(&name) {
                         let mut writer = Writer::new(Vec::new());
                         writer.write_event(Event::Start(start))?;
@@ -312,7 +315,7 @@ impl<R: BufRead> EnexReader<R> {
                     }
                 }
                 Event::Empty(empty) => {
-                    let name = xml_name(empty.name().as_ref());
+                    let name = empty.name().as_ref().to_owned();
                     if self.is_unmodelled_note_child(&name) {
                         let mut writer = Writer::new(Vec::new());
                         writer.write_event(Event::Empty(empty))?;
@@ -331,17 +334,13 @@ impl<R: BufRead> EnexReader<R> {
                         return Ok(Some(item));
                     }
                 }
-                Event::Text(text) => {
-                    let raw = String::from_utf8_lossy(text.as_ref());
-                    match quick_xml::escape::unescape(&raw) {
-                        Ok(decoded) => self.text.push_str(&decoded),
-                        Err(_) => self.text.push_str(&raw),
-                    }
-                }
-                Event::CData(data) => self.text.push_str(&String::from_utf8_lossy(data.as_ref())),
+                Event::Text(text) => match quick_xml::escape::unescape(&text) {
+                    Ok(decoded) => self.text.push_str(&decoded),
+                    Err(_) => self.text.push_str(&text),
+                },
+                Event::CData(data) => self.text.push_str(&data),
                 Event::GeneralRef(reference) => {
-                    let name = String::from_utf8_lossy(reference.as_ref()).into_owned();
-                    self.text.push_str(&resolve_reference(&name));
+                    self.text.push_str(&resolve_reference(&reference));
                 }
                 Event::Eof => {
                     self.finished = true;
@@ -582,10 +581,9 @@ impl<S: BufRead> Read for Base64Text<'_, S> {
 
 fn attribute(element: &BytesStart<'_>, name: &str) -> Option<String> {
     let attribute = element.try_get_attribute(name).ok().flatten()?;
-    let raw = String::from_utf8_lossy(&attribute.value);
-    Some(match quick_xml::escape::unescape(&raw) {
+    Some(match quick_xml::escape::unescape(&attribute.value) {
         Ok(value) => value.into_owned(),
-        Err(_) => raw.into_owned(),
+        Err(_) => attribute.value.into_owned(),
     })
 }
 
@@ -636,10 +634,6 @@ fn insert_attribute(
             attributes.insert(name.to_owned(), Value::String(value));
         }
     }
-}
-
-fn xml_name(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes).into_owned()
 }
 
 fn nonempty(value: String) -> Option<String> {
@@ -1295,6 +1289,29 @@ mod tests {
             "<en-export><note><title>Cut off</title><content><![CDATA[<en-note>",
         ));
         assert!(reader.next_item(&mut blobs, &mut |_| {}).is_err());
+    }
+
+    #[test]
+    fn a_byte_that_is_not_text_costs_a_character_and_not_the_export() {
+        // An "é" and an "ï" as Latin-1 has them, in a title, a tag and the
+        // text, after a byte order mark.
+        let source: &[u8] = b"\xef\xbb\xbf<en-export><note><title>Caf\xe9</title><created>20240102T030405Z</created><tag>th\xe9</tag><content><![CDATA[<en-note>na\xefve</en-note>]]></content></note><note><title>Fine</title><created>20240102T030405Z</created><content><![CDATA[<en-note>ok</en-note>]]></content></note></en-export>";
+        for piece in [1, 5, 4096] {
+            let mut blobs = MemoryBlobs::default();
+            let mut reader = EnexReader::new(BufReader::with_capacity(piece, Cursor::new(source)));
+            let mut notes = Vec::new();
+            while let Some(item) = reader.next_item(&mut blobs, &mut |_| {}).unwrap() {
+                match item {
+                    EnexItem::Note(note) => notes.push(*note),
+                    EnexItem::Skipped { reason, .. } => panic!("note was skipped: {reason}"),
+                }
+            }
+            assert_eq!(notes.len(), 2, "pieces of {piece}");
+            assert_eq!(notes[0].title, "Caf\u{fffd}");
+            assert_eq!(notes[0].tags, ["th\u{fffd}"]);
+            assert!(notes[0].content.contains("na\u{fffd}ve"));
+            assert_eq!(notes[1].title, "Fine");
+        }
     }
 
     #[test]

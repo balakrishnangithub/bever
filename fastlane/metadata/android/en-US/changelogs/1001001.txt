@@ -1,0 +1,1 @@
+SQLite and the XML reader are brought up to versions with no known vulnerability. Nothing else changes; the library is used as it is.

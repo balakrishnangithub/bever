@@ -17,6 +17,7 @@ Bever reads Evernote `.enex` exports one note at a time. For each note it keeps:
 - A field is recognised by its parent element as well as its name. A `<title>` or `<created>` nested inside another block does not change the note's title or date.
 - Attachment data is base64-decoded as a stream and written straight into the attachment store, which computes its SHA-256 and Evernote MD5 on the way. Memory use does not grow with attachment size.
 - A note or attachment that cannot be read is skipped and named in the import summary. The rest of the file is imported.
+- Bytes that are not UTF-8 become "�" before the XML parser reads them; it would stop at the first one. The file is imported, without the characters those bytes stood for.
 - The import can be cancelled between notes. Notes already imported stay.
 
 ### Notebooks and duplicates
