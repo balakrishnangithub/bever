@@ -22,6 +22,7 @@ Bever is an independent project. It is not affiliated with, endorsed by, or spon
 - Create, rename, and delete notebooks, stacks, and tags. Deleting a notebook moves its notes to the trash.
 - Move, copy, tag, untag, trash, restore, delete, and export several notes at once.
 - Shortcuts to notes, notebooks, stacks, tags, and searches; note counts in the sidebar.
+- In the sidebar the shortcuts, the notebooks, and the tags are three boxes, each of which folds away and says how many it holds; what is in a stack or in a tag stands further in, under its name.
 - Back and forward among the notes and the lists you have been at, as in a browser: the arrows beside the name, Alt+Left and Alt+Right, or the side buttons of a mouse.
 - The order you choose for the list of notes, and for the notebooks and the tags on their screens, is remembered on the device.
 - The list of notes shows each note by its largest picture, or by the one you choose from a picture's menu (**Use as note thumbnail**).
@@ -50,7 +51,9 @@ Bever is an independent project. It is not affiliated with, endorsed by, or spon
 - Checklists, highlights, code blocks, encrypted blocks, and links between notes are understood.
 - Web clippings, and laid-out HTML pasted into a note such as rendered mathematics, are shown with their own layout and can be made editable.
 - Importing the same file twice does not create duplicates.
-- Importing from the Evernote application on the same computer also brings its stacks, the nesting of its tags, and its shortcuts.
+- Importing from the Evernote application on the same computer also brings its stacks, the nesting of its tags, and its shortcuts, and gives a note that has no title the one Evernote shows for it.
+- Evernote's tasks come as checklists in their notes, with when each is due.
+- An import ends by saying what it left in Evernote: notes in its trash, shortcuts that lead nowhere, attachments Evernote itself has lost.
 
 **Search**
 

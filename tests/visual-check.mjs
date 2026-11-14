@@ -623,6 +623,44 @@ try {
   await grouped.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
   await notebooks.getByRole('button', { name: 'Expand Notebooks', exact: true }).click();
   await expect(notebooks.locator('.notebook-row')).toHaveCount(8);
+  // Shortcuts, notebooks and tags are three boxes that fold alike, and each
+  // says how many it holds.
+  const boxes = grouped.locator('.sidebar-section');
+  await expect(boxes).toHaveCount(3);
+  await expect(boxes.locator('.section-heading .section-open > span')).toHaveText([
+    'Shortcuts',
+    'Notebooks',
+    'Tags',
+  ]);
+  await expect(notebooks.locator('.section-count')).toHaveText('7');
+  // What a box holds is in it, and a notebook of a stack begins further in
+  // than the stack: under the stack's name, not under its picture.
+  const frame = await notebooks.boundingBox();
+  for (const row of await notebooks.locator('.notebook-row').all()) {
+    const place = await row.boundingBox();
+    expect(place.x).toBeGreaterThan(frame.x);
+    expect(place.x + place.width).toBeLessThan(frame.x + frame.width);
+  }
+  const pictureAt = async (row) => (await row.locator('.tree-row > svg').first().boundingBox()).x;
+  const stackRow = notebooks.locator('.stack-row', { hasText: 'Learning' });
+  const insideStack = notebooks.locator('.stack-children .notebook-row', { hasText: 'Reading' });
+  expect((await pictureAt(insideStack)) - (await pictureAt(stackRow))).toBeGreaterThanOrEqual(16);
+  const outside = notebooks.locator('.section-body > .notebook-row', { hasText: 'Inbox' });
+  expect(await pictureAt(outside)).toBe(await pictureAt(stackRow));
+  // The shortcuts fold as the others do, by the arrow or by their name,
+  // and stay folded.
+  const shortcutBox = boxes.first();
+  await expect(shortcutBox.locator('.section-body')).toBeVisible();
+  await shortcutBox.getByRole('button', { name: 'Collapse Shortcuts', exact: true }).click();
+  await expect(shortcutBox.locator('.section-body')).toHaveCount(0);
+  await grouped.reload({ waitUntil: 'domcontentloaded' });
+  await grouped.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+  await expect(shortcutBox.getByRole('button', { name: 'Expand Shortcuts', exact: true })).toHaveAttribute(
+    'aria-expanded',
+    'false',
+  );
+  await shortcutBox.locator('.section-open').click();
+  await expect(shortcutBox.locator('.section-body')).toBeVisible();
   // A tag that is inside another is under it, and shown when that is
   // unfolded. Numbers in names count as numbers: 2 comes before 10.
   const tags = grouped.locator('.sidebar-tag-tree');
@@ -1888,7 +1926,13 @@ try {
   const finished = importing.getByRole('dialog', { name: 'Import finished' });
   await expect(finished).toContainText('375 notes and 750 attachments imported from 4 notebooks');
   // Importing again is how changes made in Evernote arrive.
-  await expect(finished).toContainText('3 notes that changed in Evernote brought up to date');
+  await expect(finished).toContainText('3 notes that were here brought up to what Evernote has');
+  // What came as something else, and what was left in Evernote, is said.
+  await expect(finished).toContainText('9 tasks in 2 notes brought as checklists');
+  await expect(finished).toContainText('5 tags that no note has added');
+  await expect(finished.locator('.import-left')).toHaveText(
+    'Not brought: 2 notes in Evernote’s trash; 1 shortcut that leads to something Evernote has no more, or that is not in the library.',
+  );
   await expect(finished).toContainText('1 note changed both here and in Evernote');
   // The notes that were left out are named in the summary too.
   await expect(finished).toContainText(

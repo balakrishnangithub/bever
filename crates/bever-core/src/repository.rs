@@ -426,7 +426,32 @@ impl Library {
         notebook_id: &str,
         run_mark: i64,
     ) -> Result<ImportNoteResult> {
-        self.import_note_form(imported, notebook_id, run_mark, false)
+        self.import_note_form(imported, notebook_id, run_mark, ImportForm::default())
+    }
+
+    /// Imports a note read from the Evernote application's own files, whole
+    /// or (`partial`) without attachments that could not be had. There a
+    /// note's identifier is its own and what is read is what Evernote has
+    /// now. So a note that is here under that identifier, and was not
+    /// changed here, is brought to what Evernote has whatever the times of
+    /// the two say: Evernote changes tags, and sometimes a time, without
+    /// the note becoming later.
+    pub fn import_local_note(
+        &self,
+        imported: EnexNote,
+        notebook_id: &str,
+        run_mark: i64,
+        partial: bool,
+    ) -> Result<ImportNoteResult> {
+        self.import_note_form(
+            imported,
+            notebook_id,
+            run_mark,
+            ImportForm {
+                partial,
+                identified: true,
+            },
+        )
     }
 
     /// Imports a note some of whose attachments could not be had: its text
@@ -441,7 +466,15 @@ impl Library {
         notebook_id: &str,
         run_mark: i64,
     ) -> Result<ImportNoteResult> {
-        self.import_note_form(imported, notebook_id, run_mark, true)
+        self.import_note_form(
+            imported,
+            notebook_id,
+            run_mark,
+            ImportForm {
+                partial: true,
+                identified: false,
+            },
+        )
     }
 
     fn import_note_form(
@@ -449,8 +482,10 @@ impl Library {
         imported: EnexNote,
         notebook_id: &str,
         run_mark: i64,
-        partial: bool,
+        form: ImportForm,
     ) -> Result<ImportNoteResult> {
+        let partial = form.partial;
+        let reading = imported.earlier;
         let note_id = Uuid::new_v4().to_string();
         let resources = imported
             .resources
@@ -511,6 +546,61 @@ impl Library {
         if let Some(existing) = duplicate {
             return Ok(ImportNoteResult::Duplicate(existing));
         }
+        // Here as an earlier version of Bever read it, under another title
+        // or without its tasks? Then it is this note, and reading it better
+        // is no second note.
+        if let Some(reading) = reading {
+            let mut read_then = note.clone();
+            read_then.title = reading.title;
+            read_then.original_enml = Some(reading.content);
+            read_then.attributes = reading.attributes;
+            let then_key = note_import_key(&read_then)?;
+            let here = transaction
+                .query_row(
+                    "SELECT note_id FROM import_sources WHERE import_key = ?1",
+                    [&then_key],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if let Some(here) = here {
+                let earlier = note_with(&transaction, &here)?;
+                if note_import_key(&earlier)? == then_key {
+                    let note = replace_imported(&transaction, &earlier, note, &import_key)?;
+                    let images_queued = mark_ocr_pending(&transaction, &note.id)?;
+                    transaction.commit()?;
+                    return Ok(ImportNoteResult::Updated {
+                        note: Box::new(note),
+                        images_queued,
+                    });
+                }
+                // Changed here since. What was written here stays; this
+                // form is on record as that note's, and a title that is
+                // still the one it was given then is put right.
+                transaction.execute(
+                    "INSERT OR IGNORE INTO import_sources(import_key, note_id, imported_at) VALUES (?1, ?2, ?3)",
+                    params![import_key, earlier.id, Utc::now().timestamp_millis()],
+                )?;
+                let retitled = earlier.title == read_then.title && earlier.title != note.title;
+                if retitled {
+                    transaction.execute(
+                        "UPDATE notes SET title = ?2, revision = revision + 1, dirty = 1 WHERE id = ?1",
+                        params![earlier.id, note.title],
+                    )?;
+                    title_shortcut(&transaction, &earlier.id, &note.title)?;
+                    reindex_note(&transaction, &earlier.id)?;
+                }
+                let kept = note_with(&transaction, &earlier.id)?;
+                transaction.commit()?;
+                return Ok(if retitled {
+                    ImportNoteResult::Updated {
+                        note: Box::new(kept),
+                        images_queued: 0,
+                    }
+                } else {
+                    ImportNoteResult::Duplicate(kept.id)
+                });
+            }
+        }
         // Not here in this form. Where an earlier form of the same note is,
         // importing again is how changes made in Evernote arrive: the newer
         // form takes the earlier one's place, provided nothing was changed
@@ -540,7 +630,10 @@ impl Library {
             }
             if !untouched {
                 kept_both = true;
-            } else if note.updated_at > earlier.updated_at || completes {
+            } else if note.updated_at > earlier.updated_at
+                || completes
+                || (form.identified && !partial)
+            {
                 let note = replace_imported(&transaction, &earlier, note, &import_key)?;
                 let images_queued = mark_ocr_pending(&transaction, &note.id)?;
                 transaction.commit()?;
@@ -1033,6 +1126,7 @@ fn replace_imported(
     // A note newly inserted is marked as changed, which is what sends this
     // form to the other devices.
     insert_note(connection, &note)?;
+    title_shortcut(connection, &note.id, &note.title)?;
     let now = Utc::now().timestamp_millis();
     for (key, imported_at) in imports {
         connection.execute(
@@ -1057,6 +1151,26 @@ fn replace_imported(
         reindex_note(connection, &note.id)?;
     }
     Ok(note)
+}
+
+/// A shortcut shows its note's title, so it follows the title.
+fn title_shortcut(connection: &Connection, note_id: &str, title: &str) -> Result<()> {
+    let title = title.trim();
+    connection.execute(
+        "UPDATE shortcuts SET label = ?2 WHERE target_type = 'note' AND target_id = ?1",
+        params![note_id, if title.is_empty() { "Untitled" } else { title }],
+    )?;
+    Ok(())
+}
+
+/// How a note that is being imported is to be taken.
+#[derive(Debug, Clone, Copy, Default)]
+struct ImportForm {
+    /// Some of its attachments could not be had.
+    partial: bool,
+    /// Its identifier is its own and no other note's, and it is what
+    /// Evernote has now: it comes from Evernote's files, not from an export.
+    identified: bool,
 }
 
 /// Identifies imported content: the same note exported twice has the same

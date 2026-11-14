@@ -397,7 +397,7 @@ impl Library {
     /// library and outside the trash, when there is no shortcut to it yet,
     /// and when no shortcut to it was removed here: what was taken away in
     /// this library is not brought back. Returns how many were added.
-    pub fn add_shortcuts_as(&self, wanted: &[ForeignShortcut]) -> Result<u64> {
+    pub fn add_shortcuts_as(&self, wanted: &[ForeignShortcut]) -> Result<(u64, u64)> {
         let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         let now = Utc::now().timestamp_millis();
@@ -416,6 +416,7 @@ impl Library {
                 .optional()?)
         };
         let mut added = 0;
+        let mut nowhere = 0;
         for shortcut in wanted {
             let (kind, target) = match shortcut {
                 ForeignShortcut::Note { evernote_guid } => (
@@ -446,6 +447,7 @@ impl Library {
                 }
             };
             let Some((id, label)) = target else {
+                nowhere += 1;
                 continue;
             };
             let removed_here = transaction
@@ -466,6 +468,56 @@ impl Library {
                 added += 1;
             }
         }
+        transaction.commit()?;
+        Ok((added, nowhere))
+    }
+
+    /// Makes the tags of `names` that are not here, at the top, and returns
+    /// how many it made. An import of a whole account brings the tags that
+    /// no note has this way; the notes bring the others.
+    ///
+    /// A name is offered once: the library remembers which names it was
+    /// given, so that a tag deleted or renamed here is not made again by
+    /// the next import.
+    pub fn add_tags_once(&self, names: &[String]) -> Result<u64> {
+        const OFFERED: &str = "import.tags-offered";
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        let now = Utc::now().timestamp_millis();
+        let mut offered: Vec<String> = transaction
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                [OFFERED],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .and_then(|value| serde_json::from_str(&value).ok())
+            .unwrap_or_default();
+        let mut added = 0;
+        for name in names {
+            let Ok(name) = normalized_name(name) else {
+                continue;
+            };
+            let lower = name.to_lowercase();
+            if offered.contains(&lower) {
+                continue;
+            }
+            offered.push(lower);
+            let here = transaction
+                .prepare_cached("SELECT 1 FROM tags WHERE name = ?1 COLLATE NOCASE")?
+                .exists([name])?;
+            if !here {
+                transaction.execute(
+                    "INSERT INTO tags(id, name, parent_id, created_at, updated_at) VALUES (?1, ?2, NULL, ?3, ?3)",
+                    params![Uuid::new_v4().to_string(), name, now],
+                )?;
+                added += 1;
+            }
+        }
+        transaction.execute(
+            "INSERT INTO settings(key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![OFFERED, serde_json::to_string(&offered)?],
+        )?;
         transaction.commit()?;
         Ok(added)
     }

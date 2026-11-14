@@ -243,6 +243,15 @@ export interface ImportReport {
   tagsNested?: number;
   /** Only from the Evernote application: shortcuts it has that were added here. */
   shortcutsAdded?: number;
+  /** Only from the Evernote application: shortcuts it has that lead to nothing that is here. */
+  shortcutsNowhere?: number;
+  /** Evernote's tasks that came as items of checklists, and the notes they are in. */
+  tasksBrought?: number;
+  notesWithTasks?: number;
+  /** Only from the Evernote application: notes that lie in its trash and were not imported. */
+  notesInTrash?: number;
+  /** Only from the Evernote application: tags that no note has, added with the whole account. */
+  tagsAdded?: number;
   resourcesImported: number;
   bytesImported: number;
   imagesQueued: number;
@@ -334,6 +343,15 @@ export interface EvernoteImportReport {
   tagsNested: number;
   /** Shortcuts Evernote has that were added here. */
   shortcutsAdded: number;
+  /** Shortcuts Evernote has that lead to nothing that is here. */
+  shortcutsNowhere: number;
+  /** Evernote's tasks that came as items of checklists, and the notes they are in. */
+  tasksBrought: number;
+  notesWithTasks: number;
+  /** Notes that lie in Evernote's trash and were not imported. */
+  notesInTrash: number;
+  /** Tags that no note has, added with the whole account. */
+  tagsAdded: number;
   resourcesImported: number;
   bytesImported: number;
   imagesQueued: number;

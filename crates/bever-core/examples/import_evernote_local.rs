@@ -83,6 +83,16 @@ fn main() -> Result<()> {
         report.images_queued,
         library.counts()?.all,
     );
+    println!(
+        "{} tasks in {} notes came as checklists; {} notes in Evernote's trash were not imported; {} tags that no note has were added, {} tags nested; {} shortcuts added, {} of Evernote's lead to nothing that is here.",
+        report.tasks_brought,
+        report.notes_with_tasks,
+        report.notes_in_trash,
+        report.tags_added,
+        report.tags_nested,
+        report.shortcuts_added,
+        report.shortcuts_nowhere,
+    );
     for warning in &report.warnings {
         println!("  {warning}");
     }

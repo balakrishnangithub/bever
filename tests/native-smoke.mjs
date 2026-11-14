@@ -95,7 +95,14 @@ const evernote = join(work, 'Evernote');
       source_Notebook_id TEXT, source_Tag_id TEXT, source_SavedSearch_id TEXT, label TEXT);
     INSERT INTO Nodes_Shortcut VALUES
       ('s-1', 'V', NULL, '${note}', NULL, NULL, NULL, ''),
-      ('s-2', 'M', NULL, NULL, 'nb-1', NULL, NULL, '');
+      ('s-2', 'M', NULL, NULL, 'nb-1', NULL, NULL, ''),
+      ('s-3', 'X', 'Stack:A stack that is gone', NULL, NULL, NULL, NULL, '');
+    -- A task of the note, which Evernote keeps apart from the note's text,
+    -- and a note that lies in Evernote's trash.
+    CREATE TABLE Nodes_Task(id TEXT, label TEXT, status TEXT, sortWeight TEXT, taskGroupNoteLevelID TEXT,
+      created INTEGER, dueDate INTEGER, dueDateUIOption TEXT, deleted INTEGER, parent_Note_id TEXT);
+    INSERT INTO Nodes_Task VALUES ('task-1', 'Pack the smoke bag', 'completed', 'B', 'group-1', 1700000000000, NULL, NULL, NULL, '${note}');
+    INSERT INTO Nodes_Note VALUES ('99999999-2222-3333-4444-555555555555', 'Thrown away', 0, 1, 1, 1700000000000, 'nb-1', NULL, NULL, NULL, NULL);
   `);
   database.close();
   const body = join(evernote, 'conduit-fs', site, 'someone', 'rte', 'Note', 'internal_rteDoc', '111', '555');
@@ -476,6 +483,11 @@ try {
   await expect(finished).toContainText('1 note and 1 attachment imported from 1 notebook', {
     timeout: 30000,
   });
+  // What came as something else, and what was left in Evernote, is said.
+  await expect(finished).toContainText('1 task in 1 note brought as checklists');
+  await expect(finished.locator('.import-left')).toHaveText(
+    'Not brought: 1 note in Evernote’s trash; 1 shortcut that leads to something Evernote has no more, or that is not in the library.',
+  );
   await finished.getByRole('button', { name: 'Done' }).click();
   await expect(
     page.locator('.sidebar-section').nth(1).locator('.notebook-row', { hasText: 'Smoke travel' }),
@@ -489,7 +501,12 @@ try {
   await page.getByRole('heading', { name: 'First note', exact: true }).click();
   await expect(page.locator('.note-prose')).toContainText('Hello & goodbye');
   await expect(page.locator('.note-prose')).toContainText('notes.txt');
-  check('a notebook is imported from the Evernote application’s files, with its stack, note, and attachment');
+  // The note's task is an item of a checklist in it, ticked as it was done.
+  await expect(page.locator('.note-prose li[data-checked="true"]')).toContainText('Pack the smoke bag');
+  await expect(page.getByRole('heading', { name: 'Thrown away', exact: true })).toHaveCount(0);
+  check(
+    'a notebook is imported from the Evernote application’s files, with its stack, note, attachment, and task',
+  );
   // The shortcuts Evernote has came along, in its order.
   const shortcutNames = page.locator('.sidebar-section').first().locator('.tree-row span');
   await expect(shortcutNames).toHaveText(['Smoke travel', 'First note']);

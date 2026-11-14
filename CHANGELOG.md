@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.1.2 — 2026-11-15
+
+An import from the Evernote application gave some notes another title than Evernote shows, and left tasks out without saying so. Both are put right, in a library that was imported before as well: import again, and the notes that are there are corrected where they stand.
+
+### Fixed
+
+- **A note without a title has the title Evernote shows.** Evernote shows a note that was given no title under words of its text. Bever called every such note “Untitled Note”, as an Evernote export does. In one account of 4,832 notes that was the wrong name for 123 notes, and two of them were among the shortcuts.
+- **Tasks come with their notes.** Evernote keeps tasks apart from a note's text, and a note that had tasks showed an empty box in their place: 140 tasks in 12 notes of that account. Each group of tasks is now a checklist where it stood, in Evernote's order, finished tasks ticked, with the day or time each is due and when it reminds. The same is done with the tasks of an ENEX file.
+- **Importing again from Evernote corrects what is here, and adds nothing twice.** A note that was not changed in Bever is brought to what Evernote has now, in place, also where Evernote changed it without making it later: a tag put on a note used to bring a second copy of the note.
+- **Tags that no note has** come when every notebook is imported: 23 were left behind in that account.
+- A shortcut to a note follows the note's title when an import changes it.
+
+### Added
+
+- **The import's summary says what it did not bring**: how many notes lie in Evernote's trash, how many of Evernote's shortcuts lead to something it has no more, and which notes name an attachment that Evernote itself has lost. It also says how many tasks came as checklists.
+- **Shortcuts, notebooks and tags are three boxes in the sidebar that fold alike.** Each has an arrow that folds it away and says how many it holds; the shortcuts could not be folded before. What is in a stack or in a tag stands further in, under the name of what holds it, where before it began under its picture.
+- `cargo run --release -p bever-core --example audit_evernote_local -- <library folder>` compares a library with what Evernote has on the computer, note by note, without going through the importer, and prints what differs.
+
+### How the import was checked
+
+A library of 4,832 notes, imported from Evernote 11 with this version, was compared with Evernote's own data by that program:
+
+- every note is there once, with the title Evernote shows, its times, notebook, stack, tags, author and source;
+- all 7,840 attachments agree in hash, size, type, name and order, and each of their 7,786 files in the library (6.7 GB) was read and has the hash it is kept under;
+- the text of every note is, letter for letter, the text Evernote keeps for its own search, which is another reading of the note than Bever's: 3,477 notes with 3.3 million characters, and 1,343 notes that have no text in either;
+- all 140 tasks are in their notes, and all 602 tags are there, nested as in Evernote;
+- tables, rows, cells, lists, links, headings and rules are as many in the page Bever keeps of each note as in the note's markup.
+
+The same library as 1.1.1 had imported it, imported again with this version: 135 notes brought up to what Evernote has, none added, and the same result, but for one note that had been changed in Bever.
+
+### Compatibility
+
+- **Import again to correct a library that 1.1.1 or earlier imported from Evernote.** Notes you changed in Bever keep what you wrote; of those only a title that is still “Untitled Note” is put right.
+- **A note with tasks is no longer what its export holds**: it has checklists where its tasks were, and is exported so. Who a task is assigned to, its flag, priority and recurrence, and muted reminders are not brought.
+- 1.1.2, 1.1.1 and 1.1.0 work on the same library and synchronize with each other.
+- For those building on `bever-core`: `EnexNote` has `earlier` and `tasks`; `Library::import_local_note` is how a note from Evernote's files is imported; `Library::add_shortcuts_as` returns two counts; `LocalImportReport` and `ImportReport` have more counts.
+
+### Not verified
+
+- Nothing in this release was run on an Android device; the Android package was built, and the sidebar was looked at in a browser of a phone's size.
+- Tasks in an ENEX file are read as Evernote's published format has them (`evernote-export4.dtd`). No export with tasks was at hand to try it on.
+- How tasks look in Evernote was not compared by eye: their words, order, state and times are taken from Evernote's data.
+- The check against Evernote was made on one account, with Evernote 11 on Windows.
+- Synchronization was not run against pCloud, since no sign-in was saved on the development machine. Its tests against a stand-in for pCloud pass.
+
 ## 1.1.1 — 2026-11-14
 
 Two of the libraries Bever is built from are brought up to versions with no known vulnerability. Nothing else changes.

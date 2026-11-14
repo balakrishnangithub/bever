@@ -525,7 +525,7 @@ function OutcomeRow({ outcome }: { outcome: ImportOutcome }) {
       ? `${plural(report.notesImported, 'note')} and ${plural(report.resourcesImported, 'attachment')} imported into “${outcome.notebookName}”`
       : `${plural(report.notesImported, 'note')} and ${plural(report.resourcesImported, 'attachment')} imported from ${plural(outcome.notebooks, 'notebook')}`,
     report.notesUpdated > 0
-      ? `${plural(report.notesUpdated, 'note')} that changed in Evernote brought up to date`
+      ? `${plural(report.notesUpdated, 'note')} that ${report.notesUpdated === 1 ? 'was' : 'were'} here brought up to what Evernote has`
       : null,
     report.notesKeptBoth > 0
       ? `${plural(report.notesKeptBoth, 'note')} changed both here and in Evernote, so Evernote’s version was added beside yours`
@@ -537,6 +537,10 @@ function OutcomeRow({ outcome }: { outcome: ImportOutcome }) {
       ? `${plural(report.notesIncomplete, 'note')} imported without attachments Evernote does not have`
       : null,
     report.linksResolved > 0 ? `${plural(report.linksResolved, 'link')} between notes connected` : null,
+    report.tasksBrought
+      ? `${plural(report.tasksBrought, 'task')} in ${plural(report.notesWithTasks ?? 0, 'note')} brought as checklists`
+      : null,
+    report.tagsAdded ? `${plural(report.tagsAdded, 'tag')} that no note has added` : null,
     report.tagsNested ? `${plural(report.tagsNested, 'tag')} nested as in Evernote` : null,
     report.shortcutsAdded ? `${plural(report.shortcutsAdded, 'shortcut')} added as in Evernote` : null,
     report.imagesQueued > 0 ? `${plural(report.imagesQueued, 'image')} queued for text recognition` : null,
@@ -546,12 +550,20 @@ function OutcomeRow({ outcome }: { outcome: ImportOutcome }) {
         : 'stopped before the end'
       : null,
   ].filter(Boolean);
+  // What Evernote has that was left there on purpose, so that nothing is missed in silence.
+  const left = [
+    report.notesInTrash ? `${plural(report.notesInTrash, 'note')} in Evernote’s trash` : null,
+    report.shortcutsNowhere
+      ? `${plural(report.shortcutsNowhere, 'shortcut')} that ${report.shortcutsNowhere === 1 ? 'leads' : 'lead'} to something Evernote has no more, or that is not in the library`
+      : null,
+  ].filter(Boolean);
   return (
     <li className={report.notesFailed > 0 || report.notesIncomplete || report.cancelled ? 'partial' : ''}>
       {report.notesFailed > 0 || report.notesIncomplete || report.cancelled ? <AlertTriangle /> : <Check />}
       <div>
         <strong>{outcome.fileName}</strong>
         <p>{facts.join('; ')}.</p>
+        {left.length > 0 && <p className="import-left">Not brought: {left.join('; ')}.</p>}
         {outcome.notebooks !== undefined &&
           report.warnings.map((warning, index) => (
             <p key={index} className="import-warning">

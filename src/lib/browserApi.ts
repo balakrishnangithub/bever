@@ -1172,6 +1172,11 @@ export const browserApi: BeverApi = {
       linksResolved: 12,
       tagsNested: 4,
       shortcutsAdded: 3,
+      shortcutsNowhere: 1,
+      tasksBrought: 9,
+      notesWithTasks: 2,
+      notesInTrash: 2,
+      tagsAdded: 5,
       cancelled: false,
       warnings: withoutMissing
         ? [

@@ -252,6 +252,20 @@ fn compare(export: &EnexNote, local: &EnexNote, tally: &mut Tally) {
     });
 }
 
+/// The note as an export holds it. In two things Bever reads a note as
+/// Evernote shows it instead: the title of a note that was given none, and
+/// the tasks, which it puts into the note's text. What is compared here is
+/// the note before that.
+fn as_exported(mut note: EnexNote) -> EnexNote {
+    if let Some(earlier) = note.earlier.take() {
+        note.title = earlier.title;
+        note.content = earlier.content;
+        note.attributes = earlier.attributes;
+        note.tasks = 0;
+    }
+    note
+}
+
 fn main() -> Result<()> {
     let mut arguments = std::env::args().skip(1);
     let Some(export) = arguments.next().map(PathBuf::from) else {
@@ -277,10 +291,11 @@ fn main() -> Result<()> {
         match item {
             EnexItem::Note(note) => {
                 tally.count("notes in the export");
+                let note = as_exported(*note);
                 exported
                     .entry((note.title.clone(), note.created_at))
                     .or_default()
-                    .push(*note);
+                    .push(note);
             }
             EnexItem::Skipped { .. } => tally.count("notes of the export that cannot be read"),
         }
@@ -318,6 +333,7 @@ fn main() -> Result<()> {
             );
             account.read_notebook(&notebook.id, &mut sink, |note| match note {
                 Ok(local) => {
+                    let local = as_exported(local);
                     tally.count("notes read from Evernote’s files");
                     let key = (local.title.clone(), local.created_at);
                     match exported.get_mut(&key) {

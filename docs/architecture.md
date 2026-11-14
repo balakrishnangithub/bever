@@ -35,6 +35,7 @@ The browser adapter in `src/lib/browserApi.ts` exists only to exercise the inter
 - `blob.rs`: SHA-256 and Evernote MD5 calculation, deduplication, streamed storage, verified reads.
 - `enml.rs`: ENML to editable HTML and back, text extraction, link rewriting.
 - `enex.rs`: streaming reader, importer, and exporter.
+- `tasks.rs`: Evernote's tasks, from an export or from Evernote's files, as checklists in their note.
 - `ocr.rs`: reads queued images with the bundled models.
 - `pcloud.rs`: client for pCloud's HTTPS API with host allowlisting, retries, and streamed transfers.
 - `sync/`: the engine (`mod.rs`), notes (`notes.rs`), metadata (`metadata.rs`), the storage trait and its in-memory test implementation (`remote.rs`), and bounded parallel transfers (`transfer.rs`).

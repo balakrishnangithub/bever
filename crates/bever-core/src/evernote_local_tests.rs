@@ -392,9 +392,10 @@ fn imports_notes_into_their_notebooks_and_stacks() {
         .unwrap();
     assert_eq!(found.total, 1);
 
-    // A note without a title is called what an export calls it, and one
-    // whose heading styles were never looked at has no hidden block.
-    let second = note_titled(&library, "Untitled Note");
+    // A note without a title is called what Evernote shows for it, words
+    // of its text, and one whose heading styles were never looked at has
+    // no hidden block.
+    let second = note_titled(&library, "No title here");
     assert_eq!(second.notebook_id, loose.id);
     assert_eq!(
         second.original_enml.as_deref(),
@@ -462,8 +463,10 @@ fn a_note_evernote_has_not_downloaded_is_left_out_whole() {
         report.warnings[0]
     );
     assert_eq!(library.counts().unwrap().all, 1);
-    // Nothing of the note was stored: not even its other parts.
-    assert!(library.snapshot().unwrap().tags.is_empty());
+    // Nothing of the note was stored. Its tags are here as tags of the
+    // account, which come when every notebook is imported; no note has them.
+    assert_eq!(library.snapshot().unwrap().tags.len(), 2);
+    assert!(note_titled(&library, "No title here").tags.is_empty());
 
     // Once Evernote has the file, another run brings the note.
     evernote.file(FIRST, HASH, b"attachment bytes");
@@ -1087,7 +1090,7 @@ fn a_note_whose_text_evernote_lacks_is_left_out_even_when_asked() {
     assert_eq!(
         loose.incomplete,
         [LocalIncompleteNote {
-            title: "Untitled Note".into(),
+            title: "No title here".into(),
             text_missing: true,
             attachments: 0,
             attachments_missing: 0,
@@ -1105,7 +1108,7 @@ fn a_note_whose_text_evernote_lacks_is_left_out_even_when_asked() {
         (1, 1, 0)
     );
     assert!(
-        report.warnings[0].contains("“Untitled Note” in “Loose”"),
+        report.warnings[0].contains("“No title here” in “Loose”"),
         "{}",
         report.warnings[0]
     );
@@ -1195,7 +1198,7 @@ fn shortcuts_come_as_evernote_has_them() {
     let account = evernote.account();
     let (_directory, library) = library();
     let report = import(&library, &account);
-    assert_eq!(report.shortcuts_added, 5);
+    assert_eq!((report.shortcuts_added, report.shortcuts_nowhere), (5, 2));
     let snapshot = library.snapshot().unwrap();
     let shown = snapshot
         .shortcuts
@@ -1228,4 +1231,352 @@ fn shortcuts_come_as_evernote_has_them() {
     let again = import(&library, &account);
     assert_eq!(again.shortcuts_added, 0);
     assert_eq!(library.snapshot().unwrap().shortcuts.len(), 4);
+}
+
+/// The notes of the account as Bever read them up to 1.1.1: a note without
+/// a title under the name an export gives it, tasks left out.
+fn import_as_before(library: &Library, account: &EvernoteAccount) {
+    struct Stored<'a>(&'a Library);
+    impl BlobSink for Stored<'_> {
+        fn store(&mut self, reader: &mut dyn std::io::Read) -> Result<crate::blob::StoredBlob> {
+            let mut library = self.0;
+            library.store(reader)
+        }
+    }
+    let run = library.import_run_mark().unwrap();
+    for notebook in account.overview().unwrap().notebooks {
+        let stack = notebook
+            .stack
+            .as_deref()
+            .map(|stack| library.ensure_stack(stack).unwrap());
+        let here = library
+            .ensure_notebook(&notebook.name, stack.as_deref())
+            .unwrap();
+        let mut notes = Vec::new();
+        account
+            .read_notebook(&notebook.id, &mut Stored(library), |note| {
+                notes.push(note.unwrap())
+            })
+            .unwrap();
+        for mut note in notes {
+            if let Some(earlier) = note.earlier.take() {
+                note.title = earlier.title;
+                note.content = earlier.content;
+                note.attributes = earlier.attributes;
+            }
+            library.import_enex_note(note, &here, run).unwrap();
+        }
+    }
+}
+
+#[test]
+fn a_library_imported_before_gets_its_titles_put_right_by_importing_again() {
+    let evernote = Evernote::new();
+    // One more note without a title, which has no text either.
+    let third = "cccccccc-0000-1111-2222-333333333333";
+    evernote.note(
+        third,
+        "Untitled",
+        true,
+        "nb-2",
+        1_650_000_000_000,
+        1_650_000_000_000,
+    );
+    evernote.body(third, SECOND_BODY);
+    let account = evernote.account();
+    let (_directory, library) = library();
+    import_as_before(&library, &account);
+    let before = library.list_notes(&NoteFilter::default()).unwrap();
+    assert_eq!(
+        before
+            .notes
+            .iter()
+            .filter(|note| note.title == "Untitled Note")
+            .count(),
+        2
+    );
+    // A shortcut to one of them, and the other changed here in its text.
+    let ids: Vec<String> = before
+        .notes
+        .iter()
+        .filter(|note| note.title == "Untitled Note")
+        .map(|note| note.id.clone())
+        .collect();
+    let (kept, changed) = (
+        library.get_note(&ids[0]).unwrap(),
+        library.get_note(&ids[1]).unwrap(),
+    );
+    library
+        .toggle_shortcut("note", &kept.id, "Untitled Note")
+        .unwrap();
+    library
+        .save_note(&SaveNote {
+            id: changed.id.clone(),
+            notebook_id: changed.notebook_id.clone(),
+            title: changed.title.clone(),
+            content_html: "<p>What I wrote here</p>".into(),
+            attributes: changed.attributes.clone(),
+            tags: changed.tags.clone(),
+            base_revision: None,
+        })
+        .unwrap();
+
+    let report = import(&library, &account);
+    assert_eq!(
+        (
+            report.notes_imported,
+            report.notes_updated,
+            report.notes_kept_both,
+            report.notes_skipped
+        ),
+        (0, 2, 0, 1)
+    );
+    // The same notes, under what Evernote shows for them.
+    assert_eq!(library.counts().unwrap().all, 3);
+    let (kept, changed) = (
+        library.get_note(&kept.id).unwrap(),
+        library.get_note(&changed.id).unwrap(),
+    );
+    let mut titles = [kept.title.as_str(), changed.title.as_str()];
+    titles.sort_unstable();
+    assert_eq!(titles, ["No title here", "Untitled"]);
+    // What was written here is still there, and the shortcut follows.
+    assert!(changed.plain_text.contains("What I wrote here"));
+    assert_eq!(library.snapshot().unwrap().shortcuts[0].label, kept.title);
+    let found = library
+        .list_notes(&NoteFilter {
+            query: format!("intitle:\"{}\"", kept.title),
+            ..NoteFilter::default()
+        })
+        .unwrap();
+    assert_eq!(found.total, 1);
+
+    // Importing once more changes nothing.
+    let again = import(&library, &account);
+    assert_eq!(
+        (
+            again.notes_imported,
+            again.notes_updated,
+            again.notes_skipped
+        ),
+        (0, 0, 3)
+    );
+    assert_eq!(library.counts().unwrap().all, 3);
+}
+
+#[test]
+fn a_title_given_here_is_not_taken_back_by_importing_again() {
+    let evernote = Evernote::new();
+    let account = evernote.account();
+    let (_directory, library) = library();
+    import_as_before(&library, &account);
+    let mine = note_titled(&library, "Untitled Note");
+    library
+        .save_note(&SaveNote {
+            id: mine.id.clone(),
+            notebook_id: mine.notebook_id.clone(),
+            title: "My own name for it".into(),
+            content_html: mine.content_html.clone(),
+            attributes: mine.attributes.clone(),
+            tags: mine.tags.clone(),
+            base_revision: None,
+        })
+        .unwrap();
+    let report = import(&library, &account);
+    assert_eq!(
+        (
+            report.notes_imported,
+            report.notes_updated,
+            report.notes_kept_both,
+            report.notes_skipped
+        ),
+        (0, 0, 0, 2)
+    );
+    assert_eq!(library.counts().unwrap().all, 2);
+    assert_eq!(
+        library.get_note(&mine.id).unwrap().title,
+        "My own name for it"
+    );
+}
+
+impl Evernote {
+    /// Tasks of the second note, as Evernote keeps them: two that count and
+    /// one that was deleted, with a reminder that is on and one that is off.
+    fn tasks(&self) {
+        self.database
+            .execute_batch(&format!(
+                "CREATE TABLE Nodes_Task(id TEXT, label TEXT, status TEXT, sortWeight TEXT, taskGroupNoteLevelID TEXT,
+                     created INTEGER, dueDate INTEGER, dueDateUIOption TEXT, deleted INTEGER, parent_Note_id TEXT);
+                 CREATE TABLE Nodes_Reminder(id TEXT, reminderDate INTEGER, status TEXT, source_Task_id TEXT);
+                 INSERT INTO Nodes_Task VALUES
+                     ('task-1', 'Book <the> hotel', 'open', 'M', 'group-1', 1600000001000, NULL, NULL, NULL, '{SECOND}'),
+                     ('task-2', 'Renew passport', 'completed', 'B', 'group-1', 1600000002000, 1700000000000, 'date_time', NULL, '{SECOND}'),
+                     ('task-3', 'Deleted long ago', 'open', 'A', 'group-1', 1600000003000, NULL, NULL, 1600000009000, '{SECOND}');
+                 INSERT INTO Nodes_Reminder VALUES
+                     ('reminder-1', 1699990000000, 'active', 'task-2'),
+                     ('reminder-2', 1699980000000, 'muted', 'task-2');"
+            ))
+            .unwrap();
+    }
+}
+
+#[test]
+fn tasks_come_as_a_checklist_in_their_note() {
+    let evernote = Evernote::new();
+    evernote.tasks();
+    let account = evernote.account();
+    let (_directory, library) = library();
+    let report = import(&library, &account);
+    assert_eq!((report.tasks_brought, report.notes_with_tasks), (2, 1));
+    let note = note_titled(&library, "No title here");
+    // In Evernote's order, the finished one ticked, the deleted one not
+    // there; the group has no place in this note's text, so it is at its end.
+    let markup = note.original_enml.as_deref().unwrap();
+    assert!(markup.contains("<div>No title here</div><ul style=\"--en-todo:true;\"><li style=\"--en-checked:true;\"><div>Renew passport (due "));
+    assert!(markup.ends_with("</div></li><li style=\"--en-checked:false;\"><div>Book &lt;the> hotel</div></li></ul></en-note>"));
+    assert!(markup.contains("; reminder "));
+    assert_eq!(markup.matches("reminder ").count(), 1);
+    assert!(!markup.contains("Deleted long ago"));
+    assert_eq!(
+        note.content_html.matches("data-type=\"taskItem\"").count(),
+        2
+    );
+    assert_eq!(
+        note.content_html.matches("data-checked=\"true\"").count(),
+        1
+    );
+    assert!(note.plain_text.contains("Book <the> hotel"));
+    let found = library
+        .list_notes(&NoteFilter {
+            query: "passport".into(),
+            ..NoteFilter::default()
+        })
+        .unwrap();
+    assert_eq!(found.total, 1);
+
+    // A library that has the note without its tasks gets them by importing
+    // again, in the note that is there.
+    let (_other, earlier) = self::library();
+    import_as_before(&earlier, &account);
+    let before = note_titled(&earlier, "Untitled Note");
+    assert!(!before.plain_text.contains("passport"));
+    let report = import(&earlier, &account);
+    assert_eq!(
+        (
+            report.notes_imported,
+            report.notes_updated,
+            report.tasks_brought
+        ),
+        (0, 1, 2)
+    );
+    assert_eq!(earlier.counts().unwrap().all, 2);
+    let after = earlier.get_note(&before.id).unwrap();
+    assert_eq!(after.title, "No title here");
+    assert!(after.plain_text.contains("Renew passport"));
+}
+
+#[test]
+fn what_evernote_changed_without_a_later_time_is_brought_into_the_note_that_is_here() {
+    let evernote = Evernote::new();
+    let account = evernote.account();
+    let (_directory, library) = library();
+    import(&library, &account);
+    let second = note_titled(&library, "No title here");
+    // A tag put on a note leaves the time of its last change as it was.
+    evernote
+        .database
+        .execute("INSERT INTO NoteTag VALUES ('3', ?1, 'tag-1')", [SECOND])
+        .unwrap();
+    let report = import(&library, &account);
+    assert_eq!(
+        (
+            report.notes_imported,
+            report.notes_updated,
+            report.notes_kept_both,
+            report.notes_skipped
+        ),
+        (0, 1, 0, 1)
+    );
+    assert_eq!(library.counts().unwrap().all, 2);
+    assert_eq!(library.get_note(&second.id).unwrap().tags, ["paris"]);
+
+    // Nor does a time that Evernote has set back leave the note behind.
+    evernote
+        .database
+        .execute(
+            "UPDATE Nodes_Note SET updated = updated - 86400000, label = 'Named at last', isUntitled = 0 WHERE id = ?1",
+            [SECOND],
+        )
+        .unwrap();
+    let report = import(&library, &account);
+    assert_eq!((report.notes_imported, report.notes_updated), (0, 1));
+    assert_eq!(library.counts().unwrap().all, 2);
+    let now = library.get_note(&second.id).unwrap();
+    assert_eq!(now.title, "Named at last");
+    assert_eq!(now.updated_at, second.updated_at - 86_400_000);
+}
+
+#[test]
+fn what_is_not_brought_is_counted() {
+    let evernote = Evernote::new();
+    // A note in Evernote's trash, a tag that no note has, and an attachment
+    // that the first note's text names though Evernote has it no more.
+    evernote.note(
+        "trashed-note-0000-0000-000000000000",
+        "Thrown away",
+        false,
+        "nb-1",
+        1,
+        1,
+    );
+    evernote
+        .database
+        .execute_batch(
+            "UPDATE Nodes_Note SET deleted = 1700000000000 WHERE label = 'Thrown away';
+             INSERT INTO Nodes_Tag VALUES ('tag-3', 'spare');
+             DELETE FROM Attachment WHERE id = 'att-1';",
+        )
+        .unwrap();
+    let account = evernote.account();
+
+    // One notebook: its notes, and no tags but theirs.
+    let (_one, partly) = library();
+    let only = import_local(
+        &partly,
+        &account,
+        Some(&["nb-2".to_owned()]),
+        LocalImportOptions::default(),
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!((only.notes_in_trash, only.tags_added), (0, 0));
+    assert!(partly.snapshot().unwrap().tags.is_empty());
+
+    let (_directory, library) = library();
+    let report = import(&library, &account);
+    assert_eq!(
+        (
+            report.notes_imported,
+            report.notes_in_trash,
+            report.tags_added
+        ),
+        (2, 1, 1)
+    );
+    assert_eq!(library.counts().unwrap().all, 2);
+    let tags = library.snapshot().unwrap().tags;
+    assert_eq!(tags.len(), 3);
+    assert_eq!(report.warnings.len(), 1);
+    assert_eq!(
+        report.warnings[0],
+        "1 note names attachments that Evernote itself does not have, so they are missing here as they are there: “First note” in “Travel”."
+    );
+    assert!(note_titled(&library, "First note").resources.is_empty());
+
+    // A tag deleted here is not made again by the next import.
+    let spare = tags.iter().find(|tag| tag.name == "spare").unwrap();
+    library.delete_tag(&spare.id).unwrap();
+    let again = import(&library, &account);
+    assert_eq!(again.tags_added, 0);
+    assert_eq!(library.snapshot().unwrap().tags.len(), 2);
 }

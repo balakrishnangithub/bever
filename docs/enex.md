@@ -39,6 +39,7 @@ Exports from current Evernote versions contain no GUIDs, so the second rule is t
 
 - Checklists in both shapes — `<ul style="--en-todo:true;">` with `--en-checked` items, and classic `<en-todo>` — become editable checklists.
 - Evernote code blocks and highlight spans become code blocks and highlights.
+- Tasks, which an export has as `<task>` elements beside a note's content, become checklists in the note, each group where the note's markup has its place: see [Importing from the Evernote application](evernote-local.md#where-a-note-is-read-as-evernote-shows-it). Anything else that stands beside a note is kept as it is and written out again by an export.
 - `en-media` elements become attachments shown in place. A picture is shown at the width its `width` attribute gives, in pixels or percent, and centred or on the right when its style says `--en-imageAlignment`. Its height follows from its proportions, which `--en-naturalWidth` and `--en-naturalHeight` give before the picture has loaded. A size or alignment chosen in Bever is written back in the same form. `en-crypt` blocks are kept and shown as encrypted; Bever does not decrypt them.
 
 ## Annotated pictures
@@ -147,6 +148,7 @@ This was checked on six exports from Evernote 11, of 2, 2, 3, 121, 171, and 705 
 What still differs from an export Evernote would make of the same notes:
 
 - a note changed in Bever is written anew from the editable document, as described above;
+- a note that had tasks is written with the checklists they became, without `<task>` elements;
 - a note imported from Evernote's own files carries the text Evernote recognised in its pictures (`<recognition>`), which Evernote 11 leaves out of its exports;
 - Evernote puts a very long value, such as a source address of several hundred letters, on a line of its own. In the exports looked at, a value of 287 letters was on its tags' line and one of 695 was not; Bever draws the line at 500, which is a guess;
 - a note's identifier is not written. It is not part of the format, and Evernote 11 does not write it. A note exported and imported again is recognised by its creation time and title.

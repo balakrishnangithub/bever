@@ -40,12 +40,17 @@ interface Props {
   onOrganize: (kind: OrganizerKind) => void;
 }
 
-/** What is folded away in the sidebar: stacks, and the two lists themselves. */
+/** What is folded away in the sidebar: stacks, and the three lists themselves. */
 const COLLAPSED_KEY = 'bever-collapsed-stacks';
 /** Tags whose nested tags are shown; a tag begins with them folded away. */
 const OPEN_TAGS_KEY = 'bever-open-tags';
+const SHORTCUTS = 'section:shortcuts';
 const NOTEBOOKS = 'section:notebooks';
 const TAGS = 'section:tags';
+
+/** The place of the arrow that unfolds a row, kept in a row that has nothing
+    to unfold, so that the names of a list stand under one another. */
+const noToggle = <span className="stack-toggle" aria-hidden="true" />;
 
 function storedIds(key: string): Record<string, boolean> {
   try {
@@ -144,6 +149,7 @@ export function Sidebar({ open: visible, onClose, onOpenNote, onSettings, onOrga
       className={`notebook-row ${filter.notebookId === notebook.id ? 'active' : ''}`}
       onContextMenu={(event) => openMenu(event, `Actions for ${notebook.name}`, notebookMenu(notebook))}
     >
+      {noToggle}
       <button className="tree-row" onClick={() => void navigate({ notebookId: notebook.id })}>
         <Folder size={14} />
         <span>{notebook.name}</span>
@@ -181,7 +187,7 @@ export function Sidebar({ open: visible, onClose, onOpenNote, onSettings, onOrga
                 <ChevronRight className={unfolded ? 'expanded' : ''} size={13} />
               </button>
             ) : (
-              <span className="stack-toggle" aria-hidden="true" />
+              noToggle
             )}
             <button
               className="tree-row stack-name"
@@ -206,13 +212,17 @@ export function Sidebar({ open: visible, onClose, onOpenNote, onSettings, onOrga
       );
     });
 
-  /** The heading of one of the two lists: it folds the list, and leads to its screen. */
+  /** The heading of one of the three lists. Its arrow folds the list away.
+      The name of the notebooks and of the tags leads to the screen that
+      lists them all; the shortcuts have no such screen, and their name
+      folds them as the arrow does. */
   const sectionHeading = (
     id: string,
-    kind: OrganizerKind,
     title: string,
     icon: ReactNode,
+    count: number,
     actions: ReactNode,
+    kind?: OrganizerKind,
   ) => (
     <h2 className="section-heading">
       <button
@@ -221,12 +231,17 @@ export function Sidebar({ open: visible, onClose, onOpenNote, onSettings, onOrga
         aria-expanded={!collapsed[id]}
         onClick={() => toggleCollapsed(id)}
       >
-        <ChevronRight className={collapsed[id] ? '' : 'expanded'} size={12} />
+        <ChevronRight className={collapsed[id] ? '' : 'expanded'} size={13} />
       </button>
       <button
         className="section-open"
-        title={`All ${title.toLowerCase()}: find, rename, and arrange them`}
+        title={
+          kind
+            ? `All ${title.toLowerCase()}: find, rename, and arrange them`
+            : `${collapsed[id] ? 'Show' : 'Hide'} the ${title.toLowerCase()}`
+        }
         onClick={() => {
+          if (!kind) return toggleCollapsed(id);
           onClose();
           onOrganize(kind);
         }}
@@ -234,6 +249,11 @@ export function Sidebar({ open: visible, onClose, onOpenNote, onSettings, onOrga
         {icon}
         <span>{title}</span>
       </button>
+      {count > 0 && (
+        <small className="section-count" aria-hidden="true">
+          {count.toLocaleString()}
+        </small>
+      )}
       <span className="section-actions">{actions}</span>
     </h2>
   );
@@ -332,59 +352,67 @@ export function Sidebar({ open: visible, onClose, onOpenNote, onSettings, onOrga
         )}
         <div className="sidebar-scroll" tabIndex={0} aria-label="Notebook navigation">
           <section className="sidebar-section">
-            <h2>
-              <Star size={13} />
-              Shortcuts
-            </h2>
-            {shortcuts.length === 0 && (
-              <p className="sidebar-empty">
-                Star a note, a notebook, a stack, a tag, or a search for quick access.
-              </p>
-            )}
-            {shortcuts.map((shortcut) => (
-              <div
-                className="notebook-row"
-                key={shortcut.id}
-                onContextMenu={(event) =>
-                  openMenu(event, `Actions for ${shortcut.label}`, [
-                    shortcutItem(shortcut.targetType, shortcut.targetId, shortcut.label),
-                  ])
-                }
-              >
-                <button
-                  className="tree-row"
-                  onClick={() => {
-                    if (shortcut.targetType === 'note') {
-                      void selectNote(shortcut.targetId);
-                      onOpenNote();
-                      onClose();
-                    } else if (shortcut.targetType === 'notebook')
-                      void navigate({ notebookId: shortcut.targetId });
-                    else if (shortcut.targetType === 'stack') void navigate({ stackId: shortcut.targetId });
-                    else if (shortcut.targetType === 'search') void navigate({ query: shortcut.targetId });
-                    else void navigate({ tagIds: [shortcut.targetId] });
-                  }}
-                  title={shortcut.targetType === 'search' ? `Search: ${shortcut.targetId}` : shortcut.label}
-                >
-                  {SHORTCUT_ICONS[shortcut.targetType]}
-                  <span>{shortcut.label}</span>
-                </button>
-                <button
-                  className="row-more"
-                  aria-label={`Remove shortcut ${shortcut.label}`}
-                  onClick={() => void toggleShortcut(shortcut.targetType, shortcut.targetId, shortcut.label)}
-                >
-                  <X />
-                </button>
+            {sectionHeading(SHORTCUTS, 'Shortcuts', <Star size={13} />, shortcuts.length, null)}
+            {!collapsed[SHORTCUTS] && (
+              <div className="section-body">
+                {shortcuts.length === 0 && (
+                  <p className="sidebar-empty">
+                    Star a note, a notebook, a stack, a tag, or a search for quick access.
+                  </p>
+                )}
+                {shortcuts.map((shortcut) => (
+                  <div
+                    className="notebook-row"
+                    key={shortcut.id}
+                    onContextMenu={(event) =>
+                      openMenu(event, `Actions for ${shortcut.label}`, [
+                        shortcutItem(shortcut.targetType, shortcut.targetId, shortcut.label),
+                      ])
+                    }
+                  >
+                    {noToggle}
+                    <button
+                      className="tree-row"
+                      onClick={() => {
+                        if (shortcut.targetType === 'note') {
+                          void selectNote(shortcut.targetId);
+                          onOpenNote();
+                          onClose();
+                        } else if (shortcut.targetType === 'notebook')
+                          void navigate({ notebookId: shortcut.targetId });
+                        else if (shortcut.targetType === 'stack')
+                          void navigate({ stackId: shortcut.targetId });
+                        else if (shortcut.targetType === 'search')
+                          void navigate({ query: shortcut.targetId });
+                        else void navigate({ tagIds: [shortcut.targetId] });
+                      }}
+                      title={
+                        shortcut.targetType === 'search' ? `Search: ${shortcut.targetId}` : shortcut.label
+                      }
+                    >
+                      {SHORTCUT_ICONS[shortcut.targetType]}
+                      <span>{shortcut.label}</span>
+                    </button>
+                    <button
+                      className="row-more"
+                      aria-label={`Remove shortcut ${shortcut.label}`}
+                      onClick={() =>
+                        void toggleShortcut(shortcut.targetType, shortcut.targetId, shortcut.label)
+                      }
+                    >
+                      <X />
+                    </button>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </section>
           <section className="sidebar-section">
             {sectionHeading(
               NOTEBOOKS,
-              'notebooks',
               'Notebooks',
               <BookOpen size={13} />,
+              overview.notebooks.length,
               <>
                 <button onClick={() => void newStack()} title="New stack" aria-label="New stack">
                   <Layers3 />
@@ -393,9 +421,10 @@ export function Sidebar({ open: visible, onClose, onOpenNote, onSettings, onOrga
                   <Plus />
                 </button>
               </>,
+              'notebooks',
             )}
             {!collapsed[NOTEBOOKS] && (
-              <>
+              <div className="section-body">
                 {overview.notebooks.filter((notebook) => !notebook.stackId).map(notebookRow)}
                 {overview.stacks.map((stack) => (
                   <div className="stack-group" key={stack.id}>
@@ -438,25 +467,29 @@ export function Sidebar({ open: visible, onClose, onOpenNote, onSettings, onOrga
                     )}
                   </div>
                 ))}
-              </>
+              </div>
             )}
           </section>
           <section className="sidebar-section">
             {sectionHeading(
               TAGS,
-              'tags',
               'Tags',
               <Tags size={13} />,
+              overview.tags.length,
               <button onClick={() => void newTag()} title="New tag" aria-label="New tag">
                 <Plus />
               </button>,
+              'tags',
             )}
-            {!collapsed[TAGS] &&
-              (overview.tags.length === 0 ? (
-                <p className="sidebar-empty">Tags you add to notes appear here.</p>
-              ) : (
-                <div className="sidebar-tag-tree">{tagRows(nestedTags.get(null) ?? [])}</div>
-              ))}
+            {!collapsed[TAGS] && (
+              <div className="section-body sidebar-tag-tree">
+                {overview.tags.length === 0 ? (
+                  <p className="sidebar-empty">Tags you add to notes appear here.</p>
+                ) : (
+                  tagRows(nestedTags.get(null) ?? [])
+                )}
+              </div>
+            )}
           </section>
         </div>
         <div className="sidebar-footer">

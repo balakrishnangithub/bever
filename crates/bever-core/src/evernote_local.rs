@@ -23,33 +23,49 @@
 //! same [`EnexNote`] that reading its export gives, and goes through the
 //! same import. Two things are added that an export from a current
 //! Evernote leaves out: the note's identifier, and the text Evernote
-//! recognised in its pictures.
+//! recognised in its pictures. And one thing is read as Evernote shows it
+//! and not as an export has it: the title of a note that was given none.
 //!
 //! The files are only ever read. None of this is a published format: it is
 //! what Evernote 11 writes, and another version may write something else,
 //! which is reported and never guessed at.
 
 use std::{
+    collections::HashSet,
     fs::{self, File},
     io::BufReader,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        LazyLock,
+    },
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::DateTime;
+use regex::Regex;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::{
-    enex::{BlobSink, EnexNote, EnexResource},
+    enex::{BlobSink, EarlierReading, EnexNote, EnexResource},
     error::{BeverError, Result},
     organize::ForeignShortcut,
     repository::ImportNoteResult,
+    tasks::Task,
     ydoc::{Any, XmlNode, YDoc},
     Library,
 };
+
+/// What an export calls a note that was given no title, and what Bever
+/// called it up to 1.1.1.
+const UNTITLED: &str = "Untitled Note";
+
+/// The attachments a note's markup names, by their hashes.
+static MEDIA: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"<en-media\b[^>]*\shash="([0-9A-Fa-f]{32})""#).expect("valid regex")
+});
 
 fn unknown(what: &str) -> BeverError {
     BeverError::Invalid(format!(
@@ -167,6 +183,18 @@ pub struct LocalImportReport {
     pub tags_nested: u64,
     /// Shortcuts Evernote has that were added here.
     pub shortcuts_added: u64,
+    /// Shortcuts Evernote has that lead to nothing that is in the library:
+    /// a stack no notebook is in any more, a note that was not imported.
+    pub shortcuts_nowhere: u64,
+    /// Evernote's tasks that came as items of checklists, and the notes
+    /// they are in.
+    pub tasks_brought: u64,
+    pub notes_with_tasks: u64,
+    /// Notes of the chosen notebooks that lie in Evernote's trash. They are
+    /// not imported.
+    pub notes_in_trash: u64,
+    /// Tags that no note has, made because the whole account was imported.
+    pub tags_added: u64,
     pub cancelled: bool,
     pub warnings: Vec<String>,
 }
@@ -239,7 +267,10 @@ pub fn find_accounts(data_dir: &Path) -> Vec<EvernoteAccount> {
 
 struct NoteRow {
     id: String,
+    /// What Evernote shows as the note's title.
     title: String,
+    /// The note was given no title: Evernote shows words of its text.
+    untitled: bool,
     created: i64,
     updated: i64,
     author: Option<String>,
@@ -400,13 +431,12 @@ impl EvernoteAccount {
         let rows = statement.query_map([notebook_id], |row| {
             Ok(NoteRow {
                 id: row.get(0)?,
-                // A note without a title is shown in Evernote under words
-                // taken from its text, and exported as "Untitled Note".
-                title: if number(row, 13)? == Some(1) {
-                    "Untitled Note".to_owned()
-                } else {
-                    row.get::<_, Option<String>>(1)?.unwrap_or_default()
-                },
+                // What Evernote shows. For a note that was given no title
+                // those are words of its text, or "Untitled"; an export
+                // calls every such note "Untitled Note", under which nobody
+                // would look for it.
+                title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                untitled: number(row, 13)? == Some(1),
                 created: number(row, 2)?.unwrap_or(0),
                 updated: number(row, 3)?.unwrap_or(0),
                 author: text(row.get(4)?),
@@ -472,6 +502,61 @@ impl EvernoteAccount {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    /// A note's tasks, with the times at which they are to remind. Empty
+    /// when this version of Evernote's data has none.
+    fn tasks(&self, connection: &Connection, note_id: &str) -> Result<Vec<Task>> {
+        let Ok(mut statement) = connection.prepare(
+            "SELECT id, taskGroupNoteLevelID, label, status, sortWeight, created, dueDate, dueDateUIOption
+             FROM Nodes_Task
+             WHERE parent_Note_id = ?1 AND (deleted IS NULL OR deleted = 0)
+             ORDER BY rowid",
+        ) else {
+            return Ok(Vec::new());
+        };
+        let rows = statement.query_map([note_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                Task {
+                    group: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    title: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    done: row.get::<_, Option<String>>(3)?.as_deref() == Some("completed"),
+                    weight: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    created: number(row, 5)?.unwrap_or(0),
+                    due: number(row, 6)?.filter(|at| *at > 0),
+                    due_is_a_day: row.get::<_, Option<String>>(7)?.as_deref() == Some("date_only"),
+                    reminders: Vec::new(),
+                },
+            ))
+        })?;
+        let mut tasks = Vec::new();
+        for row in rows {
+            let (id, mut task) = row?;
+            if let Ok(mut reminders) = connection.prepare_cached(
+                "SELECT reminderDate FROM Nodes_Reminder
+                 WHERE source_Task_id = ?1 AND (status IS NULL OR status <> 'muted')
+                 ORDER BY reminderDate",
+            ) {
+                let times = reminders.query_map([&id], |row| number(row, 0))?;
+                for time in times {
+                    task.reminders.extend(time?.filter(|at| *at > 0));
+                }
+            }
+            tasks.push(task);
+        }
+        Ok(tasks)
+    }
+
+    /// The names of all the account's tags.
+    fn tag_names(&self, connection: &Connection) -> Result<Vec<String>> {
+        let mut statement = connection.prepare("SELECT label FROM Nodes_Tag ORDER BY rowid")?;
+        let rows = statement.query_map([], |row| row.get::<_, Option<String>>(0))?;
+        Ok(rows
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect())
+    }
+
     /// For each tag that is inside another, its name in lower case and the
     /// name of the tag it is inside. Empty when this version of Evernote's
     /// data does not say.
@@ -502,9 +587,10 @@ impl EvernoteAccount {
         Ok(parents)
     }
 
-    /// The shortcuts Evernote has, in its order. Empty when this version
+    /// The shortcuts Evernote has, in its order, and how many more it has
+    /// that lead to nothing it still has itself. Empty when this version
     /// of Evernote's data does not say.
-    fn shortcuts(&self, connection: &Connection) -> Result<Vec<ForeignShortcut>> {
+    fn shortcuts(&self, connection: &Connection) -> Result<(Vec<ForeignShortcut>, u64)> {
         let Ok(mut statement) = connection.prepare(
             "SELECT s.source_Note_id, nb.label, s.source_Stack_id, t.label, q.query, q.label
              FROM Nodes_Shortcut s
@@ -513,7 +599,7 @@ impl EvernoteAccount {
              LEFT JOIN Nodes_SavedSearch q ON q.id = s.source_SavedSearch_id
              ORDER BY s.sortOrder, s.rowid",
         ) else {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), 0));
         };
         let text = |row: &rusqlite::Row, column: usize| -> rusqlite::Result<Option<String>> {
             Ok(row
@@ -537,11 +623,9 @@ impl EvernoteAccount {
                 })
             })
         })?;
-        Ok(rows
-            .collect::<std::result::Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten()
-            .collect())
+        let rows = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        let nowhere = rows.iter().filter(|row| row.is_none()).count() as u64;
+        Ok((rows.into_iter().flatten().collect(), nowhere))
     }
 
     fn tags(&self, connection: &Connection, note_id: &str) -> Result<Vec<String>> {
@@ -564,7 +648,7 @@ impl EvernoteAccount {
     /// read, in words for the person importing.
     ///
     /// With `without_missing`, attachments that are not on this computer are
-    /// left out instead of making the note unreadable; the number says how
+    /// left out instead of making the note unreadable; `missing` says how
     /// many were. The note's text still names them.
     fn note(
         &self,
@@ -572,10 +656,14 @@ impl EvernoteAccount {
         row: &NoteRow,
         sink: &mut dyn BlobSink,
         without_missing: bool,
-    ) -> std::result::Result<(EnexNote, u64), String> {
+    ) -> std::result::Result<LocalNote, String> {
         let all = self
             .attachments(connection, &row.id)
             .map_err(|error| error.to_string())?;
+        let listed: HashSet<String> = all
+            .iter()
+            .map(|attachment| attachment.hash.to_lowercase())
+            .collect();
         // Looked for before anything is stored: a note is taken whole, or
         // without what is missing, or not at all.
         let mut attachments = Vec::new();
@@ -595,7 +683,20 @@ impl EvernoteAccount {
         let bytes = fs::read(&body).map_err(|error| format!("its text cannot be read: {error}"))?;
         let document = YDoc::from_state(&bytes)
             .map_err(|error| format!("its text cannot be read: {error}"))?;
-        let content = note_markup(&document).ok_or("its text is not a note")?;
+        let markup = note_markup(&document).ok_or("its text is not a note")?;
+        // Attachments the text names that Evernote does not list for the
+        // note. It has no file for them either; they are missing there too.
+        let absent = MEDIA
+            .captures_iter(&markup)
+            .map(|found| found[1].to_lowercase())
+            .filter(|hash| !listed.contains(hash))
+            .collect::<HashSet<_>>()
+            .len() as u64;
+        // The note's tasks are not in its text. They become checklists in it.
+        let tasks = self
+            .tasks(connection, &row.id)
+            .map_err(|error| error.to_string())?;
+        let content = crate::tasks::place(&markup, &tasks);
 
         let mut resources = Vec::new();
         for (attachment, path) in attachments.iter().zip(files) {
@@ -674,18 +775,36 @@ impl EvernoteAccount {
         let tags = self
             .tags(connection, &row.id)
             .map_err(|error| error.to_string())?;
+        let attributes = Value::Object(attributes);
+        let title = row.title.trim();
+        // As Bever read the note up to 1.1.1: under the export's name for a
+        // note without a title, and without its tasks.
+        let title_then = if row.untitled { UNTITLED } else { title };
+        let earlier = (title_then != title || !tasks.is_empty()).then(|| {
+            Box::new(EarlierReading {
+                title: title_then.to_owned(),
+                content: markup,
+                attributes: attributes.clone(),
+            })
+        });
         let note = EnexNote {
-            title: row.title.trim().to_owned(),
+            title: title.to_owned(),
             content,
             // An export gives times to the second.
             created_at: row.created.div_euclid(1000) * 1000,
             updated_at: row.updated.div_euclid(1000) * 1000,
             tags,
-            attributes: Value::Object(attributes),
+            attributes,
             evernote_guid: Some(row.id.clone()),
             resources,
+            earlier,
+            tasks: tasks.len() as u64,
         };
-        Ok((note, missing))
+        Ok(LocalNote {
+            note,
+            missing,
+            absent,
+        })
     }
 
     /// Reads every note of a notebook as an export of it would be read, for
@@ -700,12 +819,21 @@ impl EvernoteAccount {
         for row in self.notes(&connection, notebook_id)? {
             each(
                 self.note(&connection, &row, sink, false)
-                    .map(|(note, _)| note)
+                    .map(|read| read.note)
                     .map_err(|reason| (row.title.clone(), reason)),
             );
         }
         Ok(())
     }
+}
+
+/// A note as it was read from Evernote's files.
+struct LocalNote {
+    note: EnexNote,
+    /// Attachments of it that are not on this computer and were left out.
+    missing: u64,
+    /// Attachments its text names that Evernote does not have at all.
+    absent: u64,
 }
 
 /// Why a note is left out when part of it is not among Evernote's files.
@@ -937,6 +1065,7 @@ pub fn import_local(
     progress(state.clone());
 
     let mut notebooks: Vec<(String, String, Option<String>)> = Vec::new();
+    let mut notebooks_in_all = 0;
     {
         let mut statement = connection.prepare(
             "SELECT id, label, personal_Stack_id FROM Nodes_Notebook ORDER BY label COLLATE NOCASE",
@@ -950,6 +1079,7 @@ pub fn import_local(
         })?;
         for row in rows {
             let (id, name, stack) = row?;
+            notebooks_in_all += 1;
             if notebook_ids.is_none_or(|wanted| wanted.contains(&id)) {
                 notebooks.push((
                     id,
@@ -959,8 +1089,15 @@ pub fn import_local(
             }
         }
     }
+    // With every notebook chosen it is the account that is imported.
+    let whole = notebooks.len() == notebooks_in_all;
     let mut work = Vec::new();
     for (id, name, stack) in notebooks {
+        report.notes_in_trash += connection.query_row(
+            "SELECT count(*) FROM Nodes_Note WHERE parent_Notebook_id = ?1 AND deleted > 0",
+            [&id],
+            |row| row.get::<_, u64>(0),
+        )?;
         let notes = account.notes(&connection, &id)?;
         state.note_count += notes.len() as u64;
         for note in &notes {
@@ -980,6 +1117,9 @@ pub fn import_local(
     let mut without: Vec<String> = Vec::new();
     let mut not_downloaded = 0u64;
     let mut unreadable: Vec<String> = Vec::new();
+    // Notes whose text names attachments that Evernote does not have.
+    let mut lacking: Vec<String> = Vec::new();
+    let mut lacking_in_all = 0u64;
     'notebooks: for (name, stack, notes) in work {
         if cancel.load(Ordering::Relaxed) {
             report.cancelled = true;
@@ -1021,15 +1161,27 @@ pub fn import_local(
                 &mut sink,
                 options.without_missing_attachments,
             ) {
-                Ok((note, missing)) => {
+                Ok(LocalNote {
+                    note,
+                    missing,
+                    absent,
+                }) => {
                     let bytes: u64 = note.resources.iter().map(|item| item.blob.size).sum();
                     let attachments = note.resources.len() as u64 + missing;
-                    let result = if missing > 0 {
-                        library.import_enex_note_partial(note, &notebook_id, run_mark)?
-                    } else {
-                        library.import_enex_note(note, &notebook_id, run_mark)?
-                    };
+                    let tasks = note.tasks;
+                    let result =
+                        library.import_local_note(note, &notebook_id, run_mark, missing > 0)?;
                     let arrived = !matches!(result, ImportNoteResult::Duplicate(_));
+                    if arrived && tasks > 0 {
+                        report.tasks_brought += tasks;
+                        report.notes_with_tasks += 1;
+                    }
+                    if arrived && absent > 0 {
+                        lacking_in_all += 1;
+                        if lacking.len() < NAMED {
+                            lacking.push(named(&row.title, &name));
+                        }
+                    }
                     match result {
                         ImportNoteResult::Imported {
                             note,
@@ -1109,6 +1261,14 @@ pub fn import_local(
             if one { "it" } else { "each of them" },
         ));
     }
+    if lacking_in_all > 0 {
+        let one = lacking_in_all == 1;
+        report.warnings.push(format!(
+            "{lacking_in_all} {} attachments that Evernote itself does not have, so they are missing here as they are there: {}.",
+            if one { "note names" } else { "notes name" },
+            listed(&lacking, lacking_in_all),
+        ));
+    }
     report.warnings.extend(unreadable);
     state.phase = "finalizing".into();
     state.note_title = None;
@@ -1117,10 +1277,18 @@ pub fn import_local(
     // An export has a note's tags by name only. Evernote's own files also
     // say which tag is inside which, and the tags that came are placed so.
     if !report.cancelled {
+        // Notes bring the tags they have. The tags that no note has come
+        // when it is the whole account that is imported.
+        if whole {
+            report.tags_added = library.add_tags_once(&account.tag_names(&connection)?)?;
+        }
         report.tags_nested = library.nest_tags_as(&account.tag_parents(&connection)?)?;
         // Nor does an export have the shortcuts. Those whose notes,
         // notebooks, stacks and tags are here now are added.
-        report.shortcuts_added = library.add_shortcuts_as(&account.shortcuts(&connection)?)?;
+        let (shortcuts, nowhere) = account.shortcuts(&connection)?;
+        (report.shortcuts_added, report.shortcuts_nowhere) =
+            library.add_shortcuts_as(&shortcuts)?;
+        report.shortcuts_nowhere += nowhere;
     }
     library.optimize()?;
     state.phase = "complete".into();

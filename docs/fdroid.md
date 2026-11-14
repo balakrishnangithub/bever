@@ -46,9 +46,9 @@ RepoType: git
 Repo: https://github.com/balakrishnangithub/bever.git
 
 Builds:
-  - versionName: 1.1.1
-    versionCode: 1001001
-    commit: v1.1.1
+  - versionName: 1.1.2
+    versionCode: 1001002
+    commit: v1.1.2
     sudo:
       - apt-get update
       - apt-get install -y nodejs npm build-essential
@@ -68,6 +68,6 @@ Builds:
 
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
-CurrentVersion: 1.1.1
-CurrentVersionCode: 1001001
+CurrentVersion: 1.1.2
+CurrentVersionCode: 1001002
 ```

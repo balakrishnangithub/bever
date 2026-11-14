@@ -274,6 +274,12 @@ pub struct ImportReport {
     pub images_queued: u64,
     /// Internal Evernote links that now point at local notes.
     pub links_resolved: u64,
+    /// Evernote's tasks that came as items of checklists, and the notes
+    /// they are in.
+    #[serde(default)]
+    pub tasks_brought: u64,
+    #[serde(default)]
+    pub notes_with_tasks: u64,
     pub cancelled: bool,
     pub notebook_id: String,
     pub warnings: Vec<String>,

@@ -1,0 +1,1 @@
+Tasks in notes from Evernote come as checklists, and a note without a title has the title Evernote shows. Shortcuts, notebooks and tags are three boxes in the sidebar that fold alike.

@@ -106,6 +106,22 @@ pub struct EnexNote {
     pub attributes: Value,
     pub evernote_guid: Option<String>,
     pub resources: Vec<EnexResource>,
+    /// How versions of Bever up to 1.1.1 read this same note, where that
+    /// was otherwise than it is read now.
+    pub earlier: Option<Box<EarlierReading>>,
+    /// Evernote tasks that are items of checklists in `content`.
+    pub tasks: u64,
+}
+
+/// What an earlier version of Bever made of a note: under another title, or
+/// with its tasks left beside it. A library that has the note in that form
+/// has this note, and importing it again puts it right instead of adding it
+/// a second time.
+#[derive(Debug, Clone)]
+pub struct EarlierReading {
+    pub title: String,
+    pub content: String,
+    pub attributes: Value,
 }
 
 /// One `<note>` element: either a readable note, or the reason it was not.
@@ -183,11 +199,36 @@ impl NoteBuilder {
         } else {
             parse_enex_date(&self.updated).unwrap_or(created_at)
         };
-        if !self.extra_xml.is_empty() {
-            self.attributes.insert(
-                EXTRA_XML_KEY.to_owned(),
-                Value::Array(self.extra_xml.into_iter().map(Value::String).collect()),
-            );
+        // An export has a note's tasks beside its content. They become
+        // checklists in it; what else stands beside it is kept as it is,
+        // for exporting again.
+        let (tasks, kept): (Vec<_>, Vec<_>) = self
+            .extra_xml
+            .iter()
+            .map(|element| (crate::tasks::from_export(element), element))
+            .partition(|(task, _)| task.is_some());
+        let tasks: Vec<_> = tasks.into_iter().filter_map(|(task, _)| task).collect();
+        let kept: Vec<String> = kept
+            .into_iter()
+            .map(|(_, element)| element.clone())
+            .collect();
+        let extra = |elements: &[String]| {
+            Value::Array(elements.iter().cloned().map(Value::String).collect())
+        };
+        let mut earlier = None;
+        if !tasks.is_empty() {
+            let mut attributes = self.attributes.clone();
+            attributes.insert(EXTRA_XML_KEY.to_owned(), extra(&self.extra_xml));
+            earlier = Some(Box::new(EarlierReading {
+                title: self.title.clone(),
+                content: self.content.clone(),
+                attributes: Value::Object(attributes),
+            }));
+            self.content = crate::tasks::place(&self.content, &tasks);
+        }
+        if !kept.is_empty() {
+            self.attributes
+                .insert(EXTRA_XML_KEY.to_owned(), extra(&kept));
         }
         EnexItem::Note(Box::new(EnexNote {
             title: self.title,
@@ -198,6 +239,8 @@ impl NoteBuilder {
             attributes: Value::Object(self.attributes),
             evernote_guid: self.evernote_guid,
             resources: self.resources,
+            earlier,
+            tasks: tasks.len() as u64,
         }))
     }
 }
@@ -588,7 +631,7 @@ fn attribute(element: &BytesStart<'_>, name: &str) -> Option<String> {
 }
 
 /// Resolves the name between `&` and `;`. Unknown names stay as written.
-fn resolve_reference(name: &str) -> String {
+pub(crate) fn resolve_reference(name: &str) -> String {
     let code = if let Some(hex) = name.strip_prefix("#x").or_else(|| name.strip_prefix("#X")) {
         u32::from_str_radix(hex, 16).ok()
     } else if let Some(decimal) = name.strip_prefix('#') {
@@ -768,7 +811,13 @@ pub fn import_enex_reader(
                     reader.position(),
                     total_bytes,
                 );
-                match library.import_enex_note(*note, &notebook_id, run_mark)? {
+                let tasks = note.tasks;
+                let result = library.import_enex_note(*note, &notebook_id, run_mark)?;
+                if tasks > 0 && !matches!(result, ImportNoteResult::Duplicate(_)) {
+                    report.tasks_brought += tasks;
+                    report.notes_with_tasks += 1;
+                }
+                match result {
                     ImportNoteResult::Imported {
                         note,
                         images_queued,
@@ -1289,6 +1338,66 @@ mod tests {
             "<en-export><note><title>Cut off</title><content><![CDATA[<en-note>",
         ));
         assert!(reader.next_item(&mut blobs, &mut |_| {}).is_err());
+    }
+
+    #[test]
+    fn tasks_beside_a_note_become_a_checklist_in_it() {
+        const GROUP: &str = "aaaaaaaa-0000-4000-8000-000000000001";
+        let task = |title: &str, status: &str, weight: &str| {
+            format!(
+                "<task><title>{title}</title><created>20240102T030405Z</created><updated>20240102T030405Z</updated><taskStatus>{status}</taskStatus><inNote>true</inNote><taskFlag>false</taskFlag><sortWeight>{weight}</sortWeight><noteLevelID>x</noteLevelID><taskGroupNoteLevelID>{GROUP}</taskGroupNoteLevelID></task>"
+            )
+        };
+        let source = format!(
+            r#"<en-export><note><title>Trip</title><created>20240102T030405Z</created><content><![CDATA[<en-note><div>Plan</div><div style="--en-task-group:true; --en-id:{GROUP};"><div>Tasks</div></div><div>After</div></en-note>]]></content>{}{}<something-else><x>kept</x></something-else></note></en-export>"#,
+            task("Pack", "open", "M"),
+            task("Book &amp; pay", "completed", "B"),
+        );
+        let (note, _) = only_note(&source);
+        assert_eq!(note.tasks, 2);
+        assert_eq!(
+            note.content,
+            r#"<en-note><div>Plan</div><ul style="--en-todo:true;"><li style="--en-checked:true;"><div>Book &amp; pay</div></li><li style="--en-checked:false;"><div>Pack</div></li></ul><div>After</div></en-note>"#
+        );
+        // The tasks are in the note now. What else stood beside it is kept
+        // for exporting again.
+        assert_eq!(
+            note.attributes[EXTRA_XML_KEY],
+            serde_json::json!(["<something-else><x>kept</x></something-else>"])
+        );
+
+        // A library that has the note as it was read before, with an empty
+        // place where its tasks are, gets them in that same note.
+        let directory = tempfile::tempdir().unwrap();
+        let library =
+            Library::open_at(directory.path().join("db"), directory.path().join("blobs")).unwrap();
+        let notebook = library.ensure_notebook("Trips", None).unwrap();
+        let mut before = note.clone();
+        let reading = before.earlier.take().unwrap();
+        assert!(reading.content.contains("--en-task-group"));
+        assert_eq!(
+            reading.attributes[EXTRA_XML_KEY].as_array().unwrap().len(),
+            3
+        );
+        before.content = reading.content;
+        before.attributes = reading.attributes;
+        let run = library.import_run_mark().unwrap();
+        library.import_enex_note(before, &notebook, run).unwrap();
+        let run = library.import_run_mark().unwrap();
+        let again = library.import_enex_note(note, &notebook, run).unwrap();
+        assert!(matches!(again, ImportNoteResult::Updated { .. }));
+        assert_eq!(library.counts().unwrap().all, 1);
+        let filter = crate::models::NoteFilter::default();
+        let summaries = library.list_notes(&filter).unwrap().notes;
+        let stored = library.get_note(&summaries[0].id).unwrap();
+        assert_eq!(stored.plain_text.matches("Pack").count(), 1);
+        assert_eq!(
+            stored
+                .content_html
+                .matches("data-type=\"taskItem\"")
+                .count(),
+            2
+        );
     }
 
     #[test]

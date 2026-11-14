@@ -4746,3 +4746,101 @@ span.stack-toggle {
   display: flex;
   gap: 8px;
 }
+
+/* Shortcuts, notebooks and tags are three boxes, each of which folds away
+   under its heading. What is in a box is seen to be in it, and what is in a
+   stack or in a tag stands further in, under the name of what holds it:
+   every row keeps the place of the arrow that unfolds, so that names of one
+   depth begin under one another, and a depth is the width of that place. */
+.sidebar-section {
+  margin-top: 10px;
+  padding: 3px;
+  border: 1px solid var(--soft-line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 62%, var(--sidebar));
+}
+.sidebar-scroll > .sidebar-section:first-child {
+  margin-top: 14px;
+}
+.sidebar-scroll > .sidebar-section:last-child {
+  margin-bottom: 10px;
+}
+.sidebar-section h2.section-heading {
+  gap: 0;
+  min-height: 30px;
+  margin: 0;
+}
+.section-fold {
+  width: 20px;
+  height: 30px;
+  border-radius: 5px;
+}
+.section-fold:hover,
+.section-fold:focus-visible {
+  color: var(--accent-strong);
+}
+.section-open {
+  padding: 4px 6px 4px 4px;
+}
+.section-count {
+  margin-left: 1px;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+.section-body {
+  padding-bottom: 1px;
+}
+.section-body > .sidebar-empty {
+  margin: 0 10px 8px 24px;
+}
+.stack-toggle {
+  width: 20px;
+  flex: 0 0 20px;
+}
+.notebook-row .tree-row,
+.stack-row.notebook-row .tree-row {
+  padding-left: 4px;
+}
+/* The whole row answers the pointer and shows what is chosen, the arrow's
+   place with the name. */
+.notebook-row:hover,
+.notebook-row.active {
+  background: var(--accent-soft);
+}
+.notebook-row .tree-row:hover,
+.notebook-row.active > .tree-row {
+  background: none;
+  color: var(--ink);
+}
+/* A line runs down from the arrow of what holds them; they begin where its
+   name does. */
+.stack-children {
+  margin-left: 10px;
+  padding-left: 9px;
+  border-left: 1px solid var(--line);
+}
+/* The arrows sit in the middle of their places, over the lines that run
+   down from them, and are smaller than what they unfold. */
+.section-fold,
+.stack-toggle {
+  padding: 0;
+}
+.section-fold svg,
+.stack-toggle svg {
+  width: 14px;
+  height: 14px;
+}
+.section-open > svg,
+.sidebar-section .tree-row > svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+/* What an import left in Evernote on purpose: said, and no cause for alarm. */
+.import-outcomes .import-left {
+  margin-top: 6px;
+  color: var(--muted);
+}
