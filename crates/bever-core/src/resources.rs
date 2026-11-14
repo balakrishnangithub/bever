@@ -60,7 +60,7 @@ impl Library {
             (None, None)
         };
 
-        let mut connection = self.connection.lock().expect("database mutex poisoned");
+        let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         require_note(&transaction, note_id)?;
         let existing = resources_for_note(&transaction, note_id)?
@@ -114,7 +114,7 @@ impl Library {
     }
 
     pub fn resource(&self, id: &str) -> Result<Resource> {
-        let connection = self.connection.lock().expect("database mutex poisoned");
+        let connection = self.connection.lock();
         let note_id = connection
             .query_row("SELECT note_id FROM resources WHERE id = ?1", [id], |row| {
                 row.get::<_, String>(0)
@@ -130,7 +130,7 @@ impl Library {
     /// Finds an attachment by the hash an `<en-media>` element carries (MD5)
     /// or by its SHA-256.
     pub fn resource_location(&self, md5_or_sha: &str) -> Result<Resource> {
-        let connection = self.connection.lock().expect("database mutex poisoned");
+        let connection = self.connection.lock();
         let note_id = connection
             .query_row(
                 "SELECT note_id FROM resources WHERE md5 = ?1 OR sha256 = ?1 ORDER BY position LIMIT 1",
@@ -148,7 +148,7 @@ impl Library {
 
     /// Number of distinct images waiting for text recognition.
     pub fn ocr_pending(&self) -> Result<u64> {
-        let connection = self.connection.lock().expect("database mutex poisoned");
+        let connection = self.connection.lock();
         Ok(connection.query_row(
             "SELECT count(DISTINCT sha256) FROM resources WHERE ocr_state = ?1",
             [OCR_PENDING],
@@ -158,7 +158,7 @@ impl Library {
 
     /// SHA-256 of the next image to recognise, if any.
     pub fn next_ocr_job(&self) -> Result<Option<String>> {
-        let connection = self.connection.lock().expect("database mutex poisoned");
+        let connection = self.connection.lock();
         Ok(connection
             .query_row(
                 "SELECT sha256 FROM resources WHERE ocr_state = ?1 LIMIT 1",
@@ -180,7 +180,7 @@ impl Library {
         found: Option<&Recognized>,
         recognised: bool,
     ) -> Result<()> {
-        let mut connection = self.connection.lock().expect("database mutex poisoned");
+        let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         let notes = transaction
             .prepare("SELECT DISTINCT note_id FROM resources WHERE sha256 = ?1 AND ocr_state = ?2")?

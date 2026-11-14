@@ -26,6 +26,6 @@ Notes are untrusted input: they come from imported files and from other devices.
 
 ## Data-protection expectations
 
-Local notes are stored in the current user's application-data directory, not in an application-managed encrypted vault. Device disk encryption and OS account security remain important. pCloud transport uses HTTPS, but the remote Bever copy is not end-to-end encrypted. Evernote encrypted blocks are retained but not decrypted by Bever.
+Local notes are stored in the current user's application-data directory, not in an application-managed encrypted vault. Device disk encryption and OS account security remain important. pCloud transport uses HTTPS, but the remote Bever copy is not end-to-end encrypted. Evernote encrypted blocks are retained but not decrypted by Bever. The earlier versions of a note that Bever keeps before the note is changed are in the same database on the device; they go when the note is deleted for good, and with **Remove all data from this device**.
 
 The Windows installers and the Android debug APK attached to releases are not code-signed. Verify a download against the `SHA256SUMS.txt` of its release.

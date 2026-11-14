@@ -20,7 +20,7 @@ use {
 /// for each library, so erasing such a library leaves the login alone: it
 /// belongs to the installed application.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-fn is_other_library() -> bool {
+pub(crate) fn is_other_library() -> bool {
     std::env::var_os("BEVER_DATA_DIR").is_some_and(|directory| !directory.is_empty())
 }
 

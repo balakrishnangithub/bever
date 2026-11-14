@@ -11,6 +11,7 @@ import type {
   NoteFilter,
   NoteOrganizationAction,
   NotePage,
+  NoteVersion,
   OcrStatus,
   Overview,
   PCloudStatus,
@@ -59,6 +60,16 @@ export interface BeverApi {
     tags: string[],
   ) => Promise<number>;
   updateNoteTimestamps: (id: string, createdAt: number, updatedAt: number) => Promise<Note>;
+  /**
+   * Keeps the note as it is stored, before the editor changes it, and
+   * returns what stands for that form: nothing, for a note with nothing
+   * in it.
+   */
+  keepNoteVersion: (id: string) => Promise<number | null>;
+  /** The forms kept of a note, the newest first. */
+  noteVersions: (id: string) => Promise<NoteVersion[]>;
+  /** Makes a kept form the note again. */
+  restoreNoteVersion: (id: string, version: number) => Promise<Note>;
   getSettings: () => Promise<Settings>;
   setSetting: (key: SettingKey, enabled: boolean) => Promise<Settings>;
   appInfo: () => Promise<AppInfo>;
@@ -149,6 +160,9 @@ const tauriApi: BeverApi = {
   toggleShortcut: (targetType, targetId, label) => invoke('toggle_shortcut', { targetType, targetId, label }),
   organizeNotes: (noteIds, action, notebookId, tags) =>
     invoke('organize_notes', { noteIds, action, notebookId, tags }),
+  keepNoteVersion: (id) => invoke('keep_note_version', { id }),
+  noteVersions: (id) => invoke('note_versions', { id }),
+  restoreNoteVersion: (id, version) => invoke('restore_note_version', { id, version }),
   updateNoteTimestamps: (id, createdAt, updatedAt) =>
     invoke('update_note_timestamps', { id, createdAt, updatedAt }),
   getSettings: () => invoke('get_settings'),

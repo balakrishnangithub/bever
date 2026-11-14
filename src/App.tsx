@@ -1,9 +1,10 @@
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { RefreshCw, X } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { DialogHost } from './components/Dialog';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { ImportDialog } from './components/ImportDialog';
 import { NoteList } from './components/NoteList';
 import { NoteWorkspace } from './components/NoteWorkspace';
@@ -32,7 +33,11 @@ export function App() {
   const clearError = useLibraryStore((state) => state.clearError);
   const clearNotice = useLibraryStore((state) => state.clearNotice);
   const loading = useLibraryStore((state) => state.loading);
-  const hasSelectedNote = useLibraryStore((state) => state.selectedNote !== null);
+  const selectedNoteId = useLibraryStore((state) => state.selectedNote?.id ?? null);
+  const hasSelectedNote = selectedNoteId !== null;
+  const screen = useLibraryStore((state) => state.screen);
+  const steps = useLibraryStore((state) => state.steps);
+  const showScreen = useLibraryStore((state) => state.showScreen);
   const { layer, openLayer, closeLayer } = useAppLayers();
   const sidebarOpen = layer === 'sidebar';
   const mobileEditor = layer === 'editor';
@@ -49,6 +54,57 @@ export function App() {
   }, []);
   const syncStatus = useSyncStore((state) => state.status);
   const syncStarting = useSyncStore((state) => state.starting);
+
+  // Which screen is showing is part of where one is, and is the store's to
+  // say: the layer follows it, on going there and on going back to it.
+  useEffect(() => {
+    if (screen) openLayer(screen);
+    else {
+      closeLayer('notebooks');
+      closeLayer('tags');
+    }
+  }, [screen, openLayer, closeLayer]);
+  // A screen that went by other means (Android's Back, another layer over
+  // it) is left in the store as well.
+  const shown = useRef<typeof organizing>(null);
+  useEffect(() => {
+    const before = shown.current;
+    shown.current = organizing;
+    if (before && !organizing && useLibraryStore.getState().screen === before) showScreen(null);
+  }, [organizing, showScreen]);
+  // After a step back or forward, the phone layout shows the note that
+  // the place has, or the list when it has none.
+  useEffect(() => {
+    if (steps === 0) return;
+    const state = useLibraryStore.getState();
+    if (state.screen) return;
+    if (state.selectedNote) openLayer('editor');
+    else closeLayer('editor');
+  }, [steps, openLayer, closeLayer]);
+
+  // A note that is put out of sight stops playing. Its editor stays where
+  // it is, under a screen or beside the list in the phone layout, and a
+  // video in it would go on with nothing to stop it by.
+  useEffect(() => {
+    const phone = window.matchMedia('(max-width: 760px)').matches;
+    if (!organizing && !(phone && layer !== 'editor')) return;
+    for (const media of document.querySelectorAll<HTMLMediaElement>(
+      '.editor-panel video, .editor-panel audio',
+    ))
+      media.pause();
+  }, [layer, organizing]);
+
+  // The buttons a mouse has for going back and forward.
+  useEffect(() => {
+    const onMouse = (event: MouseEvent) => {
+      if (event.button !== 3 && event.button !== 4) return;
+      event.preventDefault();
+      const { goBack, goForward } = useLibraryStore.getState();
+      void (event.button === 3 ? goBack() : goForward());
+    };
+    window.addEventListener('mouseup', onMouse);
+    return () => window.removeEventListener('mouseup', onMouse);
+  }, []);
 
   // The on-screen keyboard takes the lower part of the window; a field that
   // was there is brought back into view.
@@ -106,7 +162,7 @@ export function App() {
       if (modifier && (key === 'k' || (key === 'f' && event.shiftKey))) {
         event.preventDefault();
         closeLayer('editor');
-        if (organizing) closeLayer(organizing);
+        showScreen(null);
         // The field of the list of notes, once that is what is showing.
         window.setTimeout(() =>
           document.querySelector<HTMLInputElement>('.notes-panel .search-wrap input')?.focus(),
@@ -120,12 +176,24 @@ export function App() {
         event.preventDefault();
         toggleFocus();
       }
+      // Back and forward among the places one has been, as in a browser.
+      if (event.altKey && !modifier && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+        if (document.querySelector('.modal-backdrop')) return;
+        event.preventDefault();
+        const { goBack, goForward } = useLibraryStore.getState();
+        void (event.key === 'ArrowLeft' ? goBack() : goForward());
+      }
       if (event.key === 'Escape') {
         if (settingsOpen) closeLayer('settings');
         else if (sidebarOpen) closeLayer('sidebar');
         // A dialog or a menu over the screen takes Escape for itself first.
-        else if (organizing && !document.querySelector('.modal-backdrop, .context-menu'))
-          closeLayer(organizing);
+        // The store is asked, not what was last drawn: it knows of a screen
+        // from the moment it was asked for.
+        else if (
+          useLibraryStore.getState().screen &&
+          !document.querySelector('.modal-backdrop, .context-menu')
+        )
+          showScreen(null);
       }
     };
     window.addEventListener('keydown', handle);
@@ -135,9 +203,9 @@ export function App() {
     hasSelectedNote,
     settingsOpen,
     sidebarOpen,
-    organizing,
     closeLayer,
     openLayer,
+    showScreen,
     toggleFocus,
   ]);
 
@@ -156,23 +224,38 @@ export function App() {
     >
       <Sidebar
         open={sidebarOpen}
-        // Going somewhere from the sidebar also leaves the screen of
-        // notebooks or of tags that lies over the list of notes.
-        onClose={() => {
-          closeLayer('sidebar');
-          if (organizing) closeLayer(organizing);
-        }}
+        onClose={() => closeLayer('sidebar')}
         onOpenNote={() => openLayer('editor')}
         onSettings={() => openLayer('settings')}
-        onOrganize={openLayer}
+        onOrganize={showScreen}
       />
       <NoteList onOpenSidebar={() => openLayer('sidebar')} onOpenNote={() => openLayer('editor')} />
-      <NoteWorkspace
-        onBack={() => closeLayer('editor')}
-        focused={focused && hasSelectedNote}
-        onToggleFocus={toggleFocus}
-      />
-      {organizing && <Organizer key={organizing} kind={organizing} onClose={() => closeLayer(organizing)} />}
+      {/* A note that cannot be drawn says so, and leaves the lists to go
+          on from. Another note is another try. */}
+      <ErrorBoundary
+        key={selectedNoteId}
+        fallback={(error, retry) => (
+          <main className="editor-panel empty-workspace" role="alert">
+            <h2>This note cannot be shown</h2>
+            <p>
+              Something in it could not be drawn. The note itself is stored and unchanged; it can still be
+              exported.
+            </p>
+            <pre className="failure-detail">{error.message}</pre>
+            <div className="failure-actions">
+              <button onClick={() => closeLayer('editor')}>Back to notes</button>
+              <button onClick={retry}>Try again</button>
+            </div>
+          </main>
+        )}
+      >
+        <NoteWorkspace
+          onBack={() => closeLayer('editor')}
+          focused={focused && hasSelectedNote}
+          onToggleFocus={toggleFocus}
+        />
+      </ErrorBoundary>
+      {organizing && <Organizer key={organizing} kind={organizing} onClose={() => showScreen(null)} />}
       {syncActive && (
         <button
           className="global-sync-indicator"

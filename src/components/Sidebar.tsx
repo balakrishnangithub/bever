@@ -1,13 +1,17 @@
 import {
+  ArrowLeft,
+  ArrowRight,
   BookOpen,
   ChevronRight,
   FileInput,
+  FileText,
   Folder,
   Layers3,
   Library,
   MoreHorizontal,
   Plus,
   ScanText,
+  Search,
   Settings,
   Star,
   Tag,
@@ -22,7 +26,7 @@ import { importPercent } from '../lib/importProgress';
 import { tagChildren } from '../lib/tagTree';
 import { useImportStore } from '../store/useImportStore';
 import { useLibraryStore } from '../store/useLibraryStore';
-import { emptyFilter, type Notebook, type Tag as TagItem } from '../types';
+import type { Notebook, NoteFilter, ShortcutTarget, Tag as TagItem } from '../types';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import type { OrganizerKind } from './Organizer';
 import { useOrganizeMenus } from './organizeMenus';
@@ -66,11 +70,22 @@ interface OpenMenu {
   items: MenuItem[];
 }
 
+/** What a shortcut leads to, shown before its name. */
+const SHORTCUT_ICONS: Record<ShortcutTarget, ReactNode> = {
+  note: <FileText size={14} />,
+  notebook: <Folder size={14} />,
+  stack: <Layers3 size={14} />,
+  tag: <Tag size={14} />,
+  search: <Search size={14} />,
+};
+
 export function Sidebar({ open: visible, onClose, onOpenNote, onSettings, onOrganize }: Props) {
   const overview = useLibraryStore((state) => state.overview);
   const filter = useLibraryStore((state) => state.filter);
   const ocr = useLibraryStore((state) => state.ocr);
-  const { setFilter, selectNote, createNote, toggleShortcut } = useLibraryStore.getState();
+  const { openView, selectNote, createNote, toggleShortcut, goBack, goForward } = useLibraryStore.getState();
+  const canGoBack = useLibraryStore((state) => state.placeAt > 0);
+  const canGoForward = useLibraryStore((state) => state.placeAt < state.places.length - 1);
   const { notebookMenu, stackMenu, tagMenu, shortcutItem, newNotebook, newStack, newTag } =
     useOrganizeMenus();
   const importPhase = useImportStore((state) => state.phase);
@@ -84,8 +99,8 @@ export function Sidebar({ open: visible, onClose, onOpenNote, onSettings, onOrga
   const { counts, shortcuts } = overview;
   const nestedTags = useMemo(() => tagChildren(overview.tags), [overview.tags]);
 
-  const navigate = async (next: Parameters<typeof setFilter>[0]) => {
-    await setFilter({ ...emptyFilter, ...next });
+  const navigate = async (next: Partial<NoteFilter>) => {
+    await openView(next);
     onClose();
   };
   const newNote = async () => {
@@ -239,6 +254,27 @@ export function Sidebar({ open: visible, onClose, onOpenNote, onSettings, onOrga
         <div className="brand">
           <img className="brand-mark" src="/bever.svg" alt="" />
           <span>Bever</span>
+          {/* Back and forward among the places one has been, as in a browser. */}
+          <div className="history-buttons">
+            <button
+              className="icon-button"
+              disabled={!canGoBack}
+              title="Back (Alt+Left)"
+              aria-label="Back"
+              onClick={() => void goBack().then(onClose)}
+            >
+              <ArrowLeft />
+            </button>
+            <button
+              className="icon-button"
+              disabled={!canGoForward}
+              title="Forward (Alt+Right)"
+              aria-label="Forward"
+              onClick={() => void goForward().then(onClose)}
+            >
+              <ArrowRight />
+            </button>
+          </div>
           <button className="mobile-close icon-button" onClick={onClose} aria-label="Close">
             <X />
           </button>
@@ -301,7 +337,9 @@ export function Sidebar({ open: visible, onClose, onOpenNote, onSettings, onOrga
               Shortcuts
             </h2>
             {shortcuts.length === 0 && (
-              <p className="sidebar-empty">Star a note, notebook, or tag for quick access.</p>
+              <p className="sidebar-empty">
+                Star a note, a notebook, a stack, a tag, or a search for quick access.
+              </p>
             )}
             {shortcuts.map((shortcut) => (
               <div
@@ -323,10 +361,12 @@ export function Sidebar({ open: visible, onClose, onOpenNote, onSettings, onOrga
                     } else if (shortcut.targetType === 'notebook')
                       void navigate({ notebookId: shortcut.targetId });
                     else if (shortcut.targetType === 'stack') void navigate({ stackId: shortcut.targetId });
+                    else if (shortcut.targetType === 'search') void navigate({ query: shortcut.targetId });
                     else void navigate({ tagIds: [shortcut.targetId] });
                   }}
+                  title={shortcut.targetType === 'search' ? `Search: ${shortcut.targetId}` : shortcut.label}
                 >
-                  <Star size={14} />
+                  {SHORTCUT_ICONS[shortcut.targetType]}
                   <span>{shortcut.label}</span>
                 </button>
                 <button

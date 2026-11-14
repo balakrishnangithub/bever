@@ -1,0 +1,25 @@
+name: Audit
+
+# Looks, once a week and when asked, for vulnerabilities that have become
+# known in what Bever is built from. It is apart from the checks of a
+# change, which must not begin to fail because of news from elsewhere.
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm audit --audit-level=high
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit

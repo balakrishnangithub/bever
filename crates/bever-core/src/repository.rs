@@ -45,7 +45,7 @@ pub enum ImportNoteResult {
 
 impl Library {
     pub fn snapshot(&self) -> Result<LibrarySnapshot> {
-        let connection = self.connection.lock().expect("database mutex poisoned");
+        let connection = self.connection.lock();
         let mut stacks = connection.prepare("SELECT id, name, created_at, updated_at, revision FROM stacks ORDER BY name COLLATE NATSORT")?;
         let stacks = stacks
             .query_map([], |row| {
@@ -107,7 +107,7 @@ impl Library {
 
     /// Number of notes outside the trash per notebook and tag, plus totals.
     pub fn counts(&self) -> Result<LibraryCounts> {
-        let connection = self.connection.lock().expect("database mutex poisoned");
+        let connection = self.connection.lock();
         let (all, trash) = connection.query_row(
             "SELECT count(*) FILTER (WHERE deleted_at IS NULL), count(*) FILTER (WHERE deleted_at IS NOT NULL) FROM notes",
             [],
@@ -130,7 +130,7 @@ impl Library {
     }
 
     pub fn create_note(&self, notebook_id: Option<&str>) -> Result<Note> {
-        let connection = self.connection.lock().expect("database mutex poisoned");
+        let connection = self.connection.lock();
         let notebook_id = match notebook_id {
             Some(id) => id.to_owned(),
             None => default_notebook(&connection, None)?,
@@ -152,43 +152,24 @@ impl Library {
     /// Saves a note and reports whether the version it replaced had to be
     /// preserved as a conflict copy (see [`SaveNote::base_revision`]).
     pub fn save_note_checked(&self, input: &SaveNote) -> Result<SavedNote> {
-        let mut connection = self.connection.lock().expect("database mutex poisoned");
+        let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         let conflict_copy = match input.base_revision {
             Some(base) => preserve_replaced_version(&transaction, input, base)?,
             None => None,
         };
-        let plain_text = plain_text(&input.content_html);
-        let title = input.title.trim();
-        let changed = transaction.execute(
-            "UPDATE notes SET notebook_id = ?2, title = ?3, content_html = ?4, plain_text = ?5, attributes_json = ?6, updated_at = ?7, revision = revision + 1, dirty = 1 WHERE id = ?1",
-            params![
-                input.id,
-                input.notebook_id,
-                title,
-                input.content_html,
-                plain_text,
-                serde_json::to_string(&input.attributes)?,
-                Utc::now().timestamp_millis(),
-            ],
+        store_note_form(
+            &transaction,
+            &NoteForm {
+                id: &input.id,
+                notebook_id: Some(&input.notebook_id),
+                title: &input.title,
+                content_html: &input.content_html,
+                attributes: &input.attributes,
+                tags: &input.tags,
+                updated_at: Utc::now().timestamp_millis(),
+            },
         )?;
-        if changed == 0 {
-            return Err(BeverError::NotFound(format!("note {}", input.id)));
-        }
-        transaction.execute("DELETE FROM note_tags WHERE note_id = ?1", [&input.id])?;
-        for name in &input.tags {
-            let tag_id = ensure_tag_with(&transaction, name)?;
-            transaction.execute(
-                "INSERT OR IGNORE INTO note_tags(note_id, tag_id) VALUES (?1, ?2)",
-                params![input.id, tag_id],
-            )?;
-        }
-        // A shortcut shows the note's title, so it follows a rename.
-        transaction.execute(
-            "UPDATE shortcuts SET label = ?2 WHERE target_type = 'note' AND target_id = ?1",
-            params![input.id, if title.is_empty() { "Untitled" } else { title }],
-        )?;
-        reindex_note(&transaction, &input.id)?;
         transaction.commit()?;
         Ok(SavedNote {
             note: note_with(&connection, &input.id)?,
@@ -200,7 +181,7 @@ impl Library {
         if ids.is_empty() {
             return Ok(0);
         }
-        let mut connection = self.connection.lock().expect("database mutex poisoned");
+        let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         require_notebook(&transaction, notebook_id)?;
         let now = Utc::now().timestamp_millis();
@@ -225,7 +206,7 @@ impl Library {
         }
         // Copies reference the originals' blobs; cleanup must not interleave.
         let _blobs = self.blob_guard();
-        let mut connection = self.connection.lock().expect("database mutex poisoned");
+        let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         require_notebook(&transaction, notebook_id)?;
         for id in ids {
@@ -259,7 +240,7 @@ impl Library {
         if ids.is_empty() || tags.is_empty() {
             return Ok(0);
         }
-        let mut connection = self.connection.lock().expect("database mutex poisoned");
+        let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         let tag_ids = tags
             .iter()
@@ -291,7 +272,7 @@ impl Library {
         if ids.is_empty() || tags.is_empty() {
             return Ok(0);
         }
-        let mut connection = self.connection.lock().expect("database mutex poisoned");
+        let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         let mut tag_ids = Vec::new();
         for name in tags {
@@ -333,7 +314,7 @@ impl Library {
                 "updated time must be at or after created time".into(),
             ));
         }
-        let connection = self.connection.lock().expect("database mutex poisoned");
+        let connection = self.connection.lock();
         let changed = connection.execute(
             "UPDATE notes SET created_at = ?2, updated_at = ?3, revision = revision + 1, dirty = 1 WHERE id = ?1",
             params![id, created_at, updated_at],
@@ -354,7 +335,7 @@ impl Library {
 
     /// Moves notes into or out of the trash. Unknown ids are ignored.
     pub fn set_notes_trashed(&self, ids: &[String], trashed: bool) -> Result<u64> {
-        let mut connection = self.connection.lock().expect("database mutex poisoned");
+        let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         let deleted_at = trashed.then(|| Utc::now().timestamp_millis());
         let mut changed = 0;
@@ -381,7 +362,7 @@ impl Library {
 
     pub fn empty_trash(&self) -> Result<u64> {
         let ids = {
-            let connection = self.connection.lock().expect("database mutex poisoned");
+            let connection = self.connection.lock();
             let ids = connection
                 .prepare("SELECT id FROM notes WHERE deleted_at IS NOT NULL")?
                 .query_map([], |row| row.get::<_, String>(0))?
@@ -392,12 +373,12 @@ impl Library {
     }
 
     pub fn get_note(&self, id: &str) -> Result<Note> {
-        let connection = self.connection.lock().expect("database mutex poisoned");
+        let connection = self.connection.lock();
         note_with(&connection, id)
     }
 
     pub fn all_notes(&self) -> Result<Vec<Note>> {
-        let connection = self.connection.lock().expect("database mutex poisoned");
+        let connection = self.connection.lock();
         let ids = connection
             .prepare("SELECT id FROM notes ORDER BY created_at")?
             .query_map([], |row| row.get::<_, String>(0))?
@@ -412,7 +393,7 @@ impl Library {
     /// that is the order of the export they came from, so that exporting
     /// them again writes them in that order.
     pub fn note_ids(&self, notebook_id: Option<&str>) -> Result<Vec<String>> {
-        let connection = self.connection.lock().expect("database mutex poisoned");
+        let connection = self.connection.lock();
         let ids = connection
             .prepare("SELECT id FROM notes WHERE deleted_at IS NULL AND (?1 IS NULL OR notebook_id = ?1) ORDER BY rowid")?
             .query_map([notebook_id], |row| row.get::<_, String>(0))?
@@ -428,7 +409,7 @@ impl Library {
     /// what the records of imported notes say now, before the run adds to
     /// them.
     pub fn import_run_mark(&self) -> Result<i64> {
-        let connection = self.connection.lock().expect("database mutex poisoned");
+        let connection = self.connection.lock();
         Ok(connection.query_row(
             "SELECT COALESCE(MAX(rowid), 0) FROM import_sources",
             [],
@@ -518,7 +499,7 @@ impl Library {
             resources,
         };
         let import_key = note_import_key(&note)?;
-        let mut connection = self.connection.lock().expect("database mutex poisoned");
+        let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         let duplicate = transaction
             .query_row(
@@ -595,7 +576,7 @@ impl Library {
     /// many links changed. Safe to repeat: links whose target arrives with a
     /// later import are resolved then.
     pub fn rewrite_import_links(&self) -> Result<u64> {
-        let mut connection = self.connection.lock().expect("database mutex poisoned");
+        let mut connection = self.connection.lock();
         let candidates = connection
             .prepare(
                 "SELECT id, content_html FROM notes
@@ -650,7 +631,7 @@ impl Library {
     }
 
     pub fn setting(&self, key: &str) -> Result<Option<String>> {
-        let connection = self.connection.lock().expect("database mutex poisoned");
+        let connection = self.connection.lock();
         Ok(connection
             .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
                 row.get(0)
@@ -659,7 +640,7 @@ impl Library {
     }
 
     pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
-        let connection = self.connection.lock().expect("database mutex poisoned");
+        let connection = self.connection.lock();
         connection.execute(
             "INSERT INTO settings(key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             params![key, value],
@@ -673,8 +654,8 @@ impl Library {
         if ids.is_empty() {
             return Ok(0);
         }
-        let _blobs = self.blob_gate.write().expect("blob gate poisoned");
-        let mut connection = self.connection.lock().expect("database mutex poisoned");
+        let _blobs = self.blob_sweep();
+        let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         let now = Utc::now().timestamp_millis();
         let mut blobs = Vec::new();
@@ -689,7 +670,7 @@ impl Library {
                     blobs.extend(row.get::<_, Option<String>>(1)?);
                 }
             }
-            transaction.execute("DELETE FROM notes_fts WHERE note_id = ?1", [id])?;
+            unindex_note(&transaction, id)?;
             let removed = transaction.execute("DELETE FROM notes WHERE id = ?1", [id])?;
             if removed == 0 && !leave_tombstones {
                 continue;
@@ -715,6 +696,55 @@ impl Library {
         }
         Ok(deleted)
     }
+}
+
+/// What the editor changes of a note, as it is to be stored.
+pub(crate) struct NoteForm<'a> {
+    pub id: &'a str,
+    /// `None` leaves the note in the notebook it is in.
+    pub notebook_id: Option<&'a str>,
+    pub title: &'a str,
+    pub content_html: &'a str,
+    pub attributes: &'a Value,
+    pub tags: &'a [String],
+    pub updated_at: i64,
+}
+
+/// Stores a form of a note in place of the one that is there: its text,
+/// title, details and tags, with the index and the note's shortcut
+/// following. The note counts as changed and is synchronized again.
+pub(crate) fn store_note_form(connection: &Connection, form: &NoteForm) -> Result<()> {
+    let plain_text = plain_text(form.content_html);
+    let title = form.title.trim();
+    let changed = connection.execute(
+        "UPDATE notes SET notebook_id = COALESCE(?2, notebook_id), title = ?3, content_html = ?4, plain_text = ?5, attributes_json = ?6, updated_at = ?7, revision = revision + 1, dirty = 1 WHERE id = ?1",
+        params![
+            form.id,
+            form.notebook_id,
+            title,
+            form.content_html,
+            plain_text,
+            serde_json::to_string(form.attributes)?,
+            form.updated_at,
+        ],
+    )?;
+    if changed == 0 {
+        return Err(BeverError::NotFound(format!("note {}", form.id)));
+    }
+    connection.execute("DELETE FROM note_tags WHERE note_id = ?1", [form.id])?;
+    for name in form.tags {
+        let tag_id = ensure_tag_with(connection, name)?;
+        connection.execute(
+            "INSERT OR IGNORE INTO note_tags(note_id, tag_id) VALUES (?1, ?2)",
+            params![form.id, tag_id],
+        )?;
+    }
+    // A shortcut shows the note's title, so it follows a rename.
+    connection.execute(
+        "UPDATE shortcuts SET label = ?2 WHERE target_type = 'note' AND target_id = ?1",
+        params![form.id, if title.is_empty() { "Untitled" } else { title }],
+    )?;
+    reindex_note(connection, form.id)
 }
 
 /// Keeps the stored version of a note as a separate note when it is not the
@@ -998,7 +1028,7 @@ fn replace_imported(
     for resource in &mut note.resources {
         resource.note_id = note.id.clone();
     }
-    connection.execute("DELETE FROM notes_fts WHERE note_id = ?1", [&note.id])?;
+    unindex_note(connection, &note.id)?;
     connection.execute("DELETE FROM notes WHERE id = ?1", [&note.id])?;
     // A note newly inserted is marked as changed, which is what sends this
     // form to the other devices.
@@ -1129,25 +1159,54 @@ pub(crate) fn resources_for_note(connection: &Connection, note_id: &str) -> Resu
         .collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
+/// What the index holds of a note: the columns of its row, and where they
+/// are read from. The tags are in the order they were put on the note, with
+/// [`TAG_DIVIDER`] between them.
+pub(crate) const INDEX_ROW: &str = "n.id, n.title, nb.name,
+    COALESCE((SELECT group_concat(name, char(31)) FROM
+        (SELECT t.name AS name FROM note_tags nt JOIN tags t ON t.id = nt.tag_id
+          WHERE nt.note_id = n.id ORDER BY nt.rowid)), ''),
+    n.plain_text,
+    COALESCE((SELECT group_concat(COALESCE(r.file_name, '') || ' ' || COALESCE(r.recognition_text, ''), ' ')
+        FROM resources r WHERE r.note_id = n.id), '')
+ FROM notes n JOIN notebooks nb ON nb.id = n.notebook_id";
+
+/// What stands between a note's tags in the index: no letter, so that the
+/// index reads the tags as words apart, and one a name does not have, so
+/// that the tags can be told from each other again.
+pub(crate) const TAG_DIVIDER: &str = "\u{1f}";
+
+/// Puts a note into the index as it is now, in place of what the index had
+/// of it.
 pub(crate) fn reindex_note(connection: &Connection, note_id: &str) -> Result<()> {
-    let (title, body): (String, String) = connection.query_row(
-        "SELECT title, plain_text FROM notes WHERE id = ?1",
-        [note_id],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
-    let tags = tags_for_note(connection, note_id)?.join(" ");
-    let resources = connection
-        .prepare_cached("SELECT COALESCE(file_name, ''), COALESCE(recognition_text, '') FROM resources WHERE note_id = ?1")?
-        .query_map([note_id], |row| {
-            Ok(format!("{} {}", row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?
-        .join(" ");
-    connection.execute("DELETE FROM notes_fts WHERE note_id = ?1", [note_id])?;
-    connection.execute(
-        "INSERT INTO notes_fts(note_id, title, body, tags, resources) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![note_id, title, body, tags, resources],
-    )?;
+    unindex_note(connection, note_id)?;
+    let indexed = connection
+        .prepare_cached(&format!(
+            "INSERT INTO notes_fts(note_id, title, notebook, tags, body, resources)
+             SELECT {INDEX_ROW} WHERE n.id = ?1"
+        ))?
+        .execute([note_id])?;
+    if indexed == 0 {
+        return Err(BeverError::NotFound(format!("note {note_id}")));
+    }
+    connection
+        .prepare_cached(
+            "INSERT INTO note_index(note_id, fts_row) VALUES (?1, last_insert_rowid())",
+        )?
+        .execute([note_id])?;
+    Ok(())
+}
+
+/// Takes a note out of the index.
+pub(crate) fn unindex_note(connection: &Connection, note_id: &str) -> Result<()> {
+    connection
+        .prepare_cached(
+            "DELETE FROM notes_fts WHERE rowid = (SELECT fts_row FROM note_index WHERE note_id = ?1)",
+        )?
+        .execute([note_id])?;
+    connection
+        .prepare_cached("DELETE FROM note_index WHERE note_id = ?1")?
+        .execute([note_id])?;
     Ok(())
 }
 

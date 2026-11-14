@@ -27,7 +27,8 @@ export interface Tag {
   updatedAt: number;
 }
 
-export type ShortcutTarget = 'note' | 'notebook' | 'stack' | 'tag';
+/** A search is a shortcut by its words: they are what it points to. */
+export type ShortcutTarget = 'note' | 'notebook' | 'stack' | 'tag' | 'search';
 
 export interface Shortcut {
   id: string;
@@ -140,6 +141,21 @@ export interface SaveNote {
   baseRevision: number | null;
 }
 
+/**
+ * A note as it was before it was changed in the editor, kept on this device
+ * so that the change can be taken back.
+ */
+export interface NoteVersion {
+  id: number;
+  /** When this form was put aside. */
+  keptAt: number;
+  /** The date the note itself had then. */
+  updatedAt: number;
+  title: string;
+  /** How its text begins. */
+  preview: string;
+}
+
 export interface SavedNote {
   note: Note;
   /** Title of the note that preserves the version this save replaced. */
@@ -225,6 +241,8 @@ export interface ImportReport {
   notesIncomplete?: number;
   /** Only from the Evernote application: tags placed under the tags they are under there. */
   tagsNested?: number;
+  /** Only from the Evernote application: shortcuts it has that were added here. */
+  shortcutsAdded?: number;
   resourcesImported: number;
   bytesImported: number;
   imagesQueued: number;
@@ -314,6 +332,8 @@ export interface EvernoteImportReport {
   notesIncomplete: number;
   /** Tags placed under the tags they are under in Evernote. */
   tagsNested: number;
+  /** Shortcuts Evernote has that were added here. */
+  shortcutsAdded: number;
   resourcesImported: number;
   bytesImported: number;
   imagesQueued: number;

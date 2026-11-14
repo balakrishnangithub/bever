@@ -69,9 +69,13 @@ fn main() -> Result<()> {
         .position(|argument| argument == "--library")
     {
         let folder = arguments.get(at + 1).expect("--library needs a folder");
+        let started = Instant::now();
         let library = Library::open(folder)?;
         let count = library.counts()?.all as usize;
-        println!("{count} notes in the library given");
+        println!(
+            "{count} notes in the library given, opened in {:.1?}",
+            started.elapsed()
+        );
         return measure(
             &library,
             count,

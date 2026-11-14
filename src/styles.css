@@ -4558,3 +4558,191 @@ span.stack-toggle {
   color: var(--faint);
   font-size: 12px;
 }
+
+/* Back and forward among the places one has been, beside the name. */
+.history-buttons {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+.history-buttons .icon-button {
+  width: 28px;
+  height: 28px;
+}
+.history-buttons .icon-button svg {
+  width: 16px;
+  height: 16px;
+}
+.history-buttons .icon-button:disabled {
+  opacity: 0.32;
+  cursor: default;
+  background: transparent;
+}
+.history-buttons + .mobile-close {
+  margin-left: 2px;
+}
+
+/* A search kept among the shortcuts. */
+.search-star.is-starred {
+  color: var(--accent-strong);
+}
+.search-star.is-starred svg {
+  fill: currentColor;
+}
+
+/* Taking back what was changed in a note since it was opened. */
+.discard-changes {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 12px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.discard-changes:hover {
+  background: var(--accent-soft);
+}
+.discard-changes svg {
+  width: 14px;
+  height: 14px;
+}
+.save-status {
+  white-space: nowrap;
+}
+@media (max-width: 760px) {
+  .discard-changes span {
+    display: none;
+  }
+  .discard-changes {
+    margin-left: 2px;
+    padding: 6px;
+  }
+  /* With that button there, saving is told by its sign alone; a save that
+     failed is still told in words. */
+  .workspace-header:has(.discard-changes) .save-status:not(.error) > span:last-child {
+    display: none;
+  }
+}
+
+/* The forms kept of a note, among its information. */
+.note-versions h3 {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+.note-versions p {
+  margin: 0;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.note-versions ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.note-versions li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--soft-line);
+  border-radius: 7px;
+}
+.note-versions li > div {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+}
+.note-versions time {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+.note-versions li span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.note-versions li strong {
+  font-weight: 600;
+}
+.note-versions li button {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: var(--accent);
+  font-size: 12px;
+}
+.note-versions li button:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+.note-versions li button:disabled {
+  opacity: 0.45;
+}
+.metadata-panel .note-versions {
+  margin-bottom: 20px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--soft-line);
+}
+
+/* A part of the interface that could not be drawn. */
+.failure-screen {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  min-height: 100vh;
+  padding: 30px;
+  background: var(--bg);
+  color: var(--ink);
+  text-align: center;
+}
+.failure-screen h1 {
+  margin: 8px 0 0;
+  font-family: Georgia, serif;
+  font-size: 24px;
+  font-weight: 500;
+}
+.failure-screen p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.failure-screen pre,
+.failure-detail {
+  max-width: min(560px, 90vw);
+  margin: 4px 0 8px;
+  padding: 8px 12px;
+  overflow: auto;
+  border: 1px solid var(--soft-line);
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: left;
+  white-space: pre-wrap;
+}
+.failure-screen button,
+.failure-actions button {
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--accent);
+  font-size: 13px;
+}
+.failure-screen button:hover,
+.failure-actions button:hover {
+  background: var(--accent-soft);
+}
+.failure-actions {
+  display: flex;
+  gap: 8px;
+}

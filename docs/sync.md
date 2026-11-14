@@ -105,6 +105,7 @@ This is a simple revision-based format, not a CRDT or an end-to-end encrypted va
 - Remote JSON and attachments are not encrypted by the application. HTTPS protects transport, not access by the storage provider.
 - Attachment files that no note uses any more are removed from the device but stay in pCloud.
 - The same Evernote export imported separately on two devices is synchronized as two sets of notes.
+- The earlier versions of a note that are kept before it is changed stay on the device that kept them.
 - Synchronization is not a substitute for independent backups or ENEX exports.
 
 ## Testing

@@ -1,0 +1,1 @@
+New: back and forward among notes and lists; a padlock, "Discard changes" and five earlier versions against changing a note by mistake; searches as shortcuts. Search orders by title, notebook, tags, then text, and by how near the words are. A list's order is remembered. A note out of sight stops playing.

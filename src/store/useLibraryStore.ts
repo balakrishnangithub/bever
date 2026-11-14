@@ -2,6 +2,7 @@ import { create } from 'zustand';
 
 import { api } from '../lib/api';
 import { editorSession } from '../lib/editorSession';
+import { amended, gone, samePlace, sameView, viewOf, type Place, type Screen } from '../lib/places';
 import {
   emptyFilter,
   emptyOverview,
@@ -11,6 +12,7 @@ import {
   type Note,
   type NoteFilter,
   type NoteOrganizationAction,
+  type NoteSort,
   type NoteSummary,
   type OcrStatus,
   type Overview,
@@ -50,6 +52,29 @@ interface LibraryState {
   /** Whether a note opened from a search shows what the search found. */
   highlightSearch: boolean;
   setHighlightSearch: (enabled: boolean) => void;
+  /**
+   * Whether a note opens for reading only, until it is unlocked: a guard
+   * against changing a note without meaning to. A choice of this device.
+   */
+  openReadOnly: boolean;
+  setOpenReadOnly: (enabled: boolean) => void;
+  /** The note made last, which opens for writing whatever the choice above. */
+  createdNoteId: string | null;
+
+  /** Where one has been, for going back and forward; see `places`. */
+  places: Place[];
+  /** Which of the places one is at. */
+  placeAt: number;
+  /** The screen of all notebooks, or of all tags, when one is showing. */
+  screen: Screen | null;
+  /** Counts the steps back and forward, for what has to follow one. */
+  steps: number;
+  /** Lists other notes: a notebook, a tag, a search. A new place. */
+  openView: (view: Partial<NoteFilter>) => Promise<void>;
+  /** Shows the screen of all notebooks or of all tags, or leaves it. */
+  showScreen: (screen: Screen | null) => void;
+  goBack: () => Promise<void>;
+  goForward: () => Promise<void>;
 
   initialize: () => Promise<void>;
   /** Loads again the part of the listing that is in view. */
@@ -129,6 +154,8 @@ function withPage(
 let queryTimer: ReturnType<typeof setTimeout> | undefined;
 
 const HIGHLIGHT_KEY = 'bever.highlightSearch';
+const SORT_KEY = 'bever.noteSort';
+const READ_ONLY_KEY = 'bever.openReadOnly';
 
 /** A choice this device remembers; null when it has none or cannot say. */
 function remembered(key: string): string | null {
@@ -138,6 +165,24 @@ function remembered(key: string): string | null {
     return null;
   }
 }
+
+function remember(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Not remembered, then; it still applies until the application closes.
+  }
+}
+
+const SORTS: NoteSort[] = ['updatedDesc', 'updatedAsc', 'createdDesc', 'createdAsc', 'titleAsc', 'titleDesc'];
+
+/** The order the list of notes was last given on this device. */
+function rememberedSort(): NoteSort {
+  const sort = remembered(SORT_KEY) as NoteSort | null;
+  return sort && SORTS.includes(sort) ? sort : 'updatedDesc';
+}
+
+const firstFilter = (): NoteFilter => ({ ...emptyFilter, sort: rememberedSort() });
 
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`;
 
@@ -153,6 +198,27 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
     }
   };
 
+  /** Where one is now. */
+  const here = (): Place => ({
+    view: viewOf(get().filter),
+    noteId: get().selectedNote?.id ?? null,
+    screen: get().screen,
+  });
+  /** One has gone somewhere else: another listing, another note, a screen. */
+  const arrive = () =>
+    set((state) => {
+      const trail = gone({ places: state.places, at: state.placeAt }, here());
+      return { places: trail.places, placeAt: trail.at };
+    });
+  /** The place one is at changed in itself: its search, its filters, its note went away. */
+  const amend = () =>
+    set((state) => {
+      const current = state.places[state.placeAt];
+      const place = here();
+      if (current && samePlace(current, place)) return {};
+      return { places: amended({ places: state.places, at: state.placeAt }, place).places };
+    });
+
   /** Brings the open note in line with the library after a change elsewhere. */
   const reloadSelectedNote = async () => {
     const selected = get().selectedNote;
@@ -161,9 +227,67 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
       const fresh = await api.getNote(selected.id);
       if (get().selectedNote?.id === fresh.id) set({ selectedNote: fresh });
     } catch {
-      // The note no longer exists.
-      if (get().selectedNote?.id === selected.id) set({ selectedNote: null });
+      // The note is not there any more.
+      if (get().selectedNote?.id === selected.id) {
+        set({ selectedNote: null });
+        amend();
+      }
     }
+  };
+
+  /**
+   * Opens a note, or none. `quiet` is for a step back or forward: it is not
+   * a new place, and a note that has gone since is simply not opened.
+   */
+  const open = async (id: string | null, quiet: boolean) => {
+    const sequence = ++selectSequence;
+    // Whatever was typed in the open note is stored before it is replaced.
+    await editorSession.flush().catch(() => undefined);
+    if (sequence !== selectSequence) return;
+    if (!id) {
+      set({ selectedNote: null });
+      if (!quiet) arrive();
+      return;
+    }
+    try {
+      const note = await api.getNote(id);
+      if (sequence !== selectSequence) return;
+      if (quiet) set({ selectedNote: note, error: null });
+      else {
+        set({ selectedNote: note, error: null, screen: null });
+        arrive();
+      }
+    } catch (error) {
+      if (sequence !== selectSequence) return;
+      if (quiet) set({ selectedNote: null });
+      else set({ error: message(error) });
+    }
+  };
+
+  /** Lists the notes of `filter` from their beginning. */
+  const list = (filter: NoteFilter) => {
+    clearTimeout(queryTimer);
+    inView = { first: 0, last: PAGE_SIZE - 1 };
+    set({ filter: { ...filter, offset: 0 }, rows: [], total: 0, listLoading: true });
+  };
+
+  /** Goes to a place one has been at. */
+  const step = async (to: number) => {
+    const place = get().places[to];
+    if (!place) return;
+    set({ placeAt: to });
+    let listing: Promise<void> | undefined;
+    if (!sameView(viewOf(get().filter), place.view)) {
+      list({
+        ...get().filter,
+        ...place.view,
+        sort: place.view.query ? 'relevance' : rememberedSort(),
+      });
+      listing = get().refreshNotes();
+    }
+    if ((get().selectedNote?.id ?? null) !== place.noteId) await open(place.noteId, true);
+    set((state) => ({ screen: place.screen, steps: state.steps + 1 }));
+    await listing;
   };
 
   return {
@@ -173,7 +297,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
     listLoading: true,
     corrected: null,
     selectedNote: null,
-    filter: { ...emptyFilter },
+    filter: firstFilter(),
     loading: true,
     busy: false,
     error: null,
@@ -184,12 +308,41 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
     highlightSearch: remembered(HIGHLIGHT_KEY) !== 'off',
     setHighlightSearch: (highlightSearch) => {
       set({ highlightSearch });
-      try {
-        window.localStorage.setItem(HIGHLIGHT_KEY, highlightSearch ? 'on' : 'off');
-      } catch {
-        // Not remembered, then; it still applies until the application closes.
-      }
+      remember(HIGHLIGHT_KEY, highlightSearch ? 'on' : 'off');
     },
+    openReadOnly: remembered(READ_ONLY_KEY) === 'on',
+    setOpenReadOnly: (openReadOnly) => {
+      set({ openReadOnly });
+      remember(READ_ONLY_KEY, openReadOnly ? 'on' : 'off');
+    },
+    createdNoteId: null,
+
+    places: [{ view: viewOf(firstFilter()), noteId: null, screen: null }],
+    placeAt: 0,
+    screen: null,
+    steps: 0,
+    openView: async (view) => {
+      list({
+        ...emptyFilter,
+        ...view,
+        sort: view.sort ?? (view.query ? 'relevance' : rememberedSort()),
+      });
+      set({ screen: null });
+      arrive();
+      await get().refreshNotes();
+    },
+    showScreen: (screen) => {
+      if (get().screen === screen) return;
+      const { places, placeAt } = get();
+      set({ screen });
+      // Leaving a screen is going back to where it was opened from, when
+      // that is where one then is; the screen stays ahead, to return to.
+      const before = places[placeAt - 1];
+      if (!screen && before && samePlace(before, here())) set({ placeAt: placeAt - 1 });
+      else arrive();
+    },
+    goBack: () => step(get().placeAt - 1),
+    goForward: () => step(get().placeAt + 1),
 
     initialize: async () => {
       try {
@@ -287,36 +440,17 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
       if (!editorSession.isDirty()) await reloadSelectedNote();
     },
 
-    selectNote: async (id) => {
-      const sequence = ++selectSequence;
-      // Whatever was typed in the open note is stored before it is replaced.
-      await editorSession.flush().catch(() => undefined);
-      if (sequence !== selectSequence) return;
-      if (!id) {
-        set({ selectedNote: null });
-        return;
-      }
-      try {
-        const note = await api.getNote(id);
-        if (sequence === selectSequence) set({ selectedNote: note, error: null });
-      } catch (error) {
-        if (sequence === selectSequence) set({ error: message(error) });
-      }
-    },
+    selectNote: (id) => open(id, false),
 
     setSelectedNote: (note) => {
       if (get().selectedNote?.id === note.id) set({ selectedNote: note });
     },
 
     setFilter: async (partial) => {
-      clearTimeout(queryTimer);
-      inView = { first: 0, last: PAGE_SIZE - 1 };
-      set((state) => ({
-        filter: { ...state.filter, ...partial, offset: 0 },
-        rows: [],
-        total: 0,
-        listLoading: true,
-      }));
+      // The order chosen for the list is this device's from then on.
+      if (partial.sort && partial.sort !== 'relevance') remember(SORT_KEY, partial.sort);
+      list({ ...get().filter, ...partial });
+      amend();
       await get().refreshNotes();
     },
 
@@ -326,12 +460,17 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
           ...state.filter,
           query,
           // Searching ranks by relevance; clearing the box restores the order.
-          sort: query ? 'relevance' : state.filter.sort === 'relevance' ? 'updatedDesc' : state.filter.sort,
+          sort: query
+            ? 'relevance'
+            : state.filter.sort === 'relevance'
+              ? rememberedSort()
+              : state.filter.sort,
           offset: 0,
         },
         // What was found so far stays until the new answer is there.
         listLoading: true,
       }));
+      amend();
       clearTimeout(queryTimer);
       queryTimer = setTimeout(() => {
         inView = { first: 0, last: PAGE_SIZE - 1 };
@@ -345,7 +484,10 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
       try {
         const note = await api.createNote(get().filter.notebookId);
         await Promise.all([get().refreshNotes(), get().refreshOverview()]);
-        if (sequence === selectSequence) set({ selectedNote: note });
+        if (sequence === selectSequence) {
+          set({ selectedNote: note, createdNoteId: note.id, screen: null });
+          arrive();
+        }
       } catch (error) {
         set({ error: message(error) });
       }
@@ -381,7 +523,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
       await editorSession.flush().catch(() => undefined);
       const deleted = await changeOverview(() => api.deleteNotebook(id));
       if (!deleted) return false;
-      if (get().filter.notebookId === id) await get().setFilter({ ...emptyFilter });
+      if (get().filter.notebookId === id) await get().openView({});
       else await get().refreshNotes();
       // Its notes moved to the trash, possibly including the open one.
       await reloadSelectedNote();
@@ -393,7 +535,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
     renameStack: (id, name) => changeOverview(() => api.renameStack(id, name)),
     deleteStack: async (id) => {
       const deleted = await changeOverview(() => api.deleteStack(id));
-      if (deleted && get().filter.stackId === id) await get().setFilter({ ...emptyFilter });
+      if (deleted && get().filter.stackId === id) await get().openView({});
       return deleted;
     },
     createTag: (name, parentId = null) => changeOverview(() => api.createTag(name, parentId)),
@@ -428,6 +570,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
         await editorSession.flush().catch(() => undefined);
         const changed = await api.setNotesTrashed(ids, true);
         if (get().selectedNote && ids.includes(get().selectedNote!.id)) set({ selectedNote: null });
+        amend();
         set({ notice: `${plural(changed, 'note')} moved to Trash.` });
         await Promise.all([get().refreshNotes(), get().refreshOverview()]);
       } catch (error) {
@@ -449,6 +592,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
       try {
         const deleted = await api.deleteNotesPermanently(ids);
         if (get().selectedNote && ids.includes(get().selectedNote!.id)) set({ selectedNote: null });
+        amend();
         set({ notice: `${plural(deleted, 'note')} deleted permanently.` });
         await Promise.all([get().refreshNotes(), get().refreshOverview()]);
       } catch (error) {
@@ -459,6 +603,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
       try {
         const deleted = await api.emptyTrash();
         if (get().selectedNote?.deletedAt) set({ selectedNote: null });
+        amend();
         set({ notice: `Trash emptied: ${plural(deleted, 'note')} deleted permanently.` });
         await Promise.all([get().refreshNotes(), get().refreshOverview()]);
       } catch (error) {

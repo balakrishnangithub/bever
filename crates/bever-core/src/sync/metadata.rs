@@ -227,7 +227,7 @@ fn fingerprint(snapshot: &LibrarySnapshot, tombstones: &[Tombstone]) -> String {
 }
 
 fn merge_remote(library: &Library, remote: &MetadataEnvelope) -> Result<()> {
-    let mut connection = library.connection.lock().expect("database mutex poisoned");
+    let mut connection = library.connection.lock();
     let transaction = connection.transaction()?;
     let now = Utc::now().timestamp_millis();
     for tombstone in &remote.tombstones {
@@ -309,7 +309,7 @@ pub(crate) fn apply_tombstones(library: &Library) -> Result<()> {
     if tombstones.is_empty() {
         return Ok(());
     }
-    let mut connection = library.connection.lock().expect("database mutex poisoned");
+    let mut connection = library.connection.lock();
     let transaction = connection.transaction()?;
     let now = Utc::now().timestamp_millis();
     for tombstone in &tombstones {

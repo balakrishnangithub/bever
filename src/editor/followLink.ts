@@ -1,6 +1,5 @@
 import { api } from '../lib/api';
 import { useLibraryStore } from '../store/useLibraryStore';
-import { emptyFilter } from '../types';
 
 const isEvernoteNoteLink = (href: string) =>
   /^(evernote:\/\/\/view\/|https?:\/\/(www\.)?evernote\.com\/(shard|l)\/)/i.test(href);
@@ -10,7 +9,7 @@ const isEvernoteNoteLink = (href: string) =>
  * note an unresolved Evernote link names, or out to the system's browser.
  */
 export function followLink(href: string, text: string) {
-  const { selectNote, setFilter, showNotice, showError } = useLibraryStore.getState();
+  const { selectNote, openView, showNotice, showError } = useLibraryStore.getState();
   if (href.startsWith('bever://note/')) {
     void selectNote(href.slice('bever://note/'.length));
   } else if (isEvernoteNoteLink(href)) {
@@ -19,7 +18,7 @@ export function followLink(href: string, text: string) {
     showNotice(
       'This link points to an Evernote note that is not in your library under that title. Showing the closest matches.',
     );
-    void setFilter({ ...emptyFilter, query: title ? `intitle:"${title}"` : '', sort: 'relevance' });
+    void openView({ query: title ? `intitle:"${title}"` : '', sort: 'relevance' });
   } else {
     api.openExternalUrl(href).catch(showError);
   }

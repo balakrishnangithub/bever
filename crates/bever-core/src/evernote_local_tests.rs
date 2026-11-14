@@ -1171,3 +1171,61 @@ fn a_library_imported_before_tags_were_nested_gets_them_nested_by_importing_agai
     let tag = |name: &str| tags.iter().find(|tag| tag.name == name).unwrap();
     assert_eq!(tag("paris").parent_id.as_ref(), Some(&tag("A & B").id));
 }
+
+#[test]
+fn shortcuts_come_as_evernote_has_them() {
+    let evernote = Evernote::new();
+    evernote
+        .database
+        .execute_batch(&format!(
+            "CREATE TABLE Nodes_SavedSearch(id TEXT, query TEXT, label TEXT);
+             INSERT INTO Nodes_SavedSearch VALUES ('search-1', 'tag:paris louvre', 'Museums');
+             CREATE TABLE Nodes_Shortcut(id TEXT, sortOrder TEXT, source_Stack_id TEXT, source_Note_id TEXT,
+                 source_Notebook_id TEXT, source_Tag_id TEXT, source_SavedSearch_id TEXT, label TEXT);
+             INSERT INTO Nodes_Shortcut VALUES
+                 ('s-1', 'YM', NULL, NULL, NULL, NULL, 'search-1', ''),
+                 ('s-2', 'M', NULL, NULL, 'nb-1', NULL, NULL, ''),
+                 ('s-3', 'V', 'Stack:Life & leisure', NULL, NULL, NULL, NULL, ''),
+                 ('s-4', 'X', NULL, NULL, NULL, 'tag-1', NULL, ''),
+                 ('s-5', 'Y', NULL, '{FIRST}', NULL, NULL, NULL, ''),
+                 ('s-6', 'YS', NULL, 'a-note-that-is-not-here', NULL, NULL, NULL, ''),
+                 ('s-7', 'YV', NULL, NULL, 'a-notebook-that-is-not-here', NULL, NULL, '');"
+        ))
+        .unwrap();
+    let account = evernote.account();
+    let (_directory, library) = library();
+    let report = import(&library, &account);
+    assert_eq!(report.shortcuts_added, 5);
+    let snapshot = library.snapshot().unwrap();
+    let shown = snapshot
+        .shortcuts
+        .iter()
+        .map(|shortcut| (shortcut.target_type.as_str(), shortcut.label.as_str()))
+        .collect::<Vec<_>>();
+    // In Evernote's order; what points to nothing that is here is left out.
+    assert_eq!(
+        shown,
+        [
+            ("notebook", "Travel"),
+            ("stack", "Life & leisure"),
+            ("tag", "paris"),
+            ("note", "First note"),
+            ("search", "Museums"),
+        ]
+    );
+    let search = &snapshot.shortcuts[4];
+    assert_eq!(search.target_id, "tag:paris louvre");
+    assert_eq!(
+        snapshot.shortcuts[3].target_id,
+        note_titled(&library, "First note").id
+    );
+
+    // Importing again adds nothing twice, and a shortcut removed here stays
+    // removed.
+    library
+        .toggle_shortcut("tag", &snapshot.shortcuts[2].target_id, "paris")
+        .unwrap();
+    let again = import(&library, &account);
+    assert_eq!(again.shortcuts_added, 0);
+    assert_eq!(library.snapshot().unwrap().shortcuts.len(), 4);
+}

@@ -1966,6 +1966,213 @@ try {
   expect(await erasing.evaluate(() => localStorage.getItem('bever-theme'))).not.toBe('dark');
   await erasing.close();
 
+  // Going back and forward among the places one has been, as in a browser.
+  {
+    const ways = await browser.newPage({ viewport: { width: 1440, height: 920 } });
+    ways.on('pageerror', (error) => errors.push(error.message));
+    ways.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    await ways.goto('http://127.0.0.1:7100', { waitUntil: 'domcontentloaded' });
+    await ways.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+    const goBack = ways.getByRole('button', { name: 'Back', exact: true });
+    const goForward = ways.getByRole('button', { name: 'Forward', exact: true });
+    const listed = ways.locator('.notes-header h1');
+    const titleField = ways.getByLabel('Note title');
+    await expect(goBack).toBeDisabled();
+    await expect(goForward).toBeDisabled();
+    await ways.getByRole('heading', { name: 'Welcome to Bever', exact: true }).click();
+    await expect(titleField).toHaveValue('Welcome to Bever');
+    await ways
+      .locator('.sidebar')
+      .getByRole('button', { name: /^Reading/ })
+      .click();
+    await expect(listed).toContainText('Reading');
+    await ways.getByRole('heading', { name: 'Bring your notes along', exact: true }).click();
+    await expect(titleField).toHaveValue('Bring your notes along');
+    await expect(goForward).toBeDisabled();
+    // Back: the note that was open before, then the list that was, then nothing open.
+    await goBack.click();
+    await expect(titleField).toHaveValue('Welcome to Bever');
+    await expect(listed).toContainText('Reading');
+    await goBack.click();
+    await expect(listed).toContainText('All notes');
+    await expect(titleField).toHaveValue('Welcome to Bever');
+    await goBack.click();
+    await expect(ways.getByText('A quiet place for your thoughts')).toBeVisible();
+    await expect(goBack).toBeDisabled();
+    // Forward, by the buttons, the keys, and the buttons of a mouse.
+    await goForward.click();
+    await expect(titleField).toHaveValue('Welcome to Bever');
+    await ways.keyboard.press('Alt+ArrowRight');
+    await expect(listed).toContainText('Reading');
+    await ways.evaluate(() => window.dispatchEvent(new MouseEvent('mouseup', { button: 4 })));
+    await expect(titleField).toHaveValue('Bring your notes along');
+    await expect(goForward).toBeDisabled();
+    await ways.keyboard.press('Alt+ArrowLeft');
+    await expect(titleField).toHaveValue('Welcome to Bever');
+    // Going somewhere else from here drops what lay ahead.
+    await ways
+      .locator('.sidebar')
+      .getByRole('button', { name: /^All notes/ })
+      .click();
+    await expect(listed).toContainText('All notes');
+    await expect(goForward).toBeDisabled();
+    // A screen is a place too: left, it stays ahead to return to.
+    const notebooksScreen = ways.getByRole('region', { name: 'Notebooks', exact: true });
+    await ways.locator('.sidebar').getByRole('button', { name: 'Notebooks', exact: true }).click();
+    await expect(notebooksScreen).toBeVisible();
+    await ways.keyboard.press('Escape');
+    await expect(notebooksScreen).toBeHidden();
+    await goForward.click();
+    await expect(notebooksScreen).toBeVisible();
+    await goBack.click();
+    await expect(notebooksScreen).toBeHidden();
+    // A search that is typed changes the place one is at; it is not many places.
+    await ways.getByLabel('Search notes').fill('lossless');
+    await expect(ways.locator('.note-card')).toHaveCount(1);
+    await ways.getByRole('heading', { name: 'Bring your notes along', exact: true }).click();
+    await expect(titleField).toHaveValue('Bring your notes along');
+    await goBack.click();
+    await expect(ways.getByLabel('Search notes')).toHaveValue('lossless');
+    await expect(titleField).toHaveValue('Welcome to Bever');
+    await goBack.click();
+    await expect(ways.getByLabel('Search notes')).toHaveValue('');
+    await ways.screenshot({ path: 'test-results/bever-back-forward.png', fullPage: true });
+
+    // A search kept among the shortcuts, by its words.
+    await ways.getByLabel('Search notes').fill('lossless');
+    await ways.getByRole('button', { name: 'Add search shortcut' }).click();
+    const shortcuts = ways.locator('.sidebar-section').first();
+    await expect(shortcuts.getByRole('button', { name: 'lossless', exact: true })).toBeVisible();
+    await ways.getByLabel('Clear search').click();
+    await expect(ways.locator('.note-card')).not.toHaveCount(1);
+    await shortcuts.getByRole('button', { name: 'lossless', exact: true }).click();
+    await expect(ways.getByLabel('Search notes')).toHaveValue('lossless');
+    await expect(ways.locator('.note-card')).toHaveCount(1);
+    await expect(ways.getByRole('button', { name: 'Remove search shortcut' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await ways.getByRole('button', { name: 'Remove search shortcut' }).click();
+    await expect(shortcuts.getByRole('button', { name: 'lossless', exact: true })).toHaveCount(0);
+    await ways.getByLabel('Clear search').click();
+
+    // A note locked against changes, and changes taken back.
+    await ways.getByRole('heading', { name: 'Welcome to Bever', exact: true }).click();
+    await expect(ways.locator('.editor-toolbar')).toBeVisible();
+    await ways.getByRole('button', { name: 'Lock this note' }).click();
+    await expect(ways.getByText('Read-only', { exact: true })).toBeVisible();
+    await expect(ways.locator('.editor-toolbar')).toHaveCount(0);
+    await expect(titleField).toHaveAttribute('readonly', '');
+    await expect(ways.getByLabel('Add a tag')).toHaveCount(0);
+    const proseBefore = await ways.locator('.note-prose').innerText();
+    await ways.locator('.note-prose').click();
+    await ways.keyboard.type('typed by mistake');
+    expect(await ways.locator('.note-prose').innerText()).toBe(proseBefore);
+    await ways.screenshot({ path: 'test-results/bever-note-locked.png', fullPage: true });
+    await ways.getByRole('button', { name: 'Unlock this note' }).click();
+    await expect(ways.locator('.editor-toolbar')).toBeVisible();
+    const discard = ways.getByRole('button', { name: 'Discard changes' });
+    await expect(discard).toHaveCount(0);
+    await titleField.fill('Welcome to Bever, spoilt');
+    await ways.locator('.note-prose').click();
+    await ways.keyboard.type('typed by mistake ');
+    await ways.getByText('Saved locally', { exact: true }).waitFor({ timeout: 10000 });
+    await expect(ways.getByRole('heading', { name: 'Welcome to Bever, spoilt', exact: true })).toBeVisible();
+    await expect(discard).toBeVisible();
+    await ways.screenshot({ path: 'test-results/bever-discard-changes.png', fullPage: true });
+    await discard.click();
+    const question = ways.getByRole('dialog', { name: 'Discard the changes?' });
+    await question.getByRole('button', { name: 'Discard changes' }).click();
+    await expect(titleField).toHaveValue('Welcome to Bever');
+    expect(await ways.locator('.note-prose').innerText()).toBe(proseBefore);
+    await expect(ways.getByRole('heading', { name: 'Welcome to Bever', exact: true })).toBeVisible();
+    await expect(discard).toHaveCount(0);
+    // What was discarded is kept, and can be put back.
+    await ways.getByRole('button', { name: 'Note information' }).click();
+    const earlier = ways.getByRole('region', { name: 'Earlier versions' });
+    await expect(earlier.locator('li')).toHaveCount(2);
+    await expect(earlier.locator('li').first()).toContainText('Welcome to Bever, spoilt');
+    await ways.screenshot({ path: 'test-results/bever-earlier-versions.png', fullPage: true });
+    await earlier.locator('li').first().getByRole('button', { name: 'Put back' }).click();
+    await ways
+      .getByRole('dialog', { name: 'Put this version back?' })
+      .getByRole('button', { name: 'Put it back' })
+      .click();
+    await expect(titleField).toHaveValue('Welcome to Bever, spoilt');
+    await expect(ways.locator('.note-prose')).toContainText('typed by mistake');
+    await ways.getByRole('button', { name: 'Close note information' }).click();
+
+    // A note put out of sight stops playing. Something that plays is put
+    // into the note's panel, and says when it was stopped.
+    const playing = () =>
+      ways.evaluate(() => {
+        document.querySelector('.editor-panel .stand-in')?.remove();
+        const audio = document.createElement('audio');
+        audio.className = 'stand-in';
+        audio.pause = () => {
+          audio.dataset.stopped = 'yes';
+        };
+        document.querySelector('.editor-panel').append(audio);
+      });
+    const stopped = () =>
+      ways.evaluate(() => document.querySelector('.editor-panel .stand-in')?.dataset.stopped === 'yes');
+    await playing();
+    await ways.locator('.sidebar').getByRole('button', { name: 'Tags', exact: true }).click();
+    await expect(ways.getByRole('region', { name: 'Tags', exact: true })).toBeVisible();
+    expect(await stopped()).toBe(true);
+    await ways.keyboard.press('Escape');
+    await ways.setViewportSize({ width: 390, height: 844 });
+    await ways.waitForTimeout(400);
+    await ways.getByRole('heading', { name: 'Bring your notes along', exact: true }).click();
+    await expect(ways.getByRole('button', { name: 'Back to notes' })).toBeVisible();
+    await playing();
+    expect(await stopped()).toBe(false);
+    await ways.getByRole('button', { name: 'Back to notes' }).click();
+    await expect.poll(stopped).toBe(true);
+    await ways.setViewportSize({ width: 1440, height: 920 });
+
+    // The order chosen for a list is this device's: it is there after a
+    // restart, in another notebook, and after a search.
+    await ways.getByLabel('Sort notes').selectOption('titleAsc');
+    await ways.locator('.sidebar').getByRole('button', { name: 'Notebooks', exact: true }).click();
+    await ways.getByLabel('Order').selectOption('count');
+    await ways.keyboard.press('Escape');
+    // Notes open read-only from now on, by this device's choice.
+    await ways.getByRole('button', { name: 'Settings & sync' }).click();
+    await ways.getByLabel('Open notes read-only; the padlock in a note unlocks it').check();
+    await ways.getByRole('button', { name: 'Close settings' }).click();
+    await ways.reload({ waitUntil: 'domcontentloaded' });
+    await ways.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+    await expect(ways.getByLabel('Sort notes')).toHaveValue('titleAsc');
+    await expect(ways.locator('.note-card h2').first()).toHaveText('Bring your notes along');
+    await ways
+      .locator('.sidebar')
+      .getByRole('button', { name: /^Reading/ })
+      .click();
+    await expect(ways.getByLabel('Sort notes')).toHaveValue('titleAsc');
+    await ways.getByLabel('Search notes').fill('notes');
+    await expect(ways.getByLabel('Sort notes')).toHaveValue('relevance');
+    await ways.getByLabel('Clear search').click();
+    await expect(ways.getByLabel('Sort notes')).toHaveValue('titleAsc');
+    await ways.locator('.sidebar').getByRole('button', { name: 'Notebooks', exact: true }).click();
+    await expect(ways.getByLabel('Order')).toHaveValue('count');
+    await ways.keyboard.press('Escape');
+    await ways.getByRole('heading', { name: 'Bring your notes along', exact: true }).click();
+    await expect(ways.getByText('Read-only', { exact: true })).toBeVisible();
+    await expect(ways.locator('.editor-toolbar')).toHaveCount(0);
+    await expect(ways.getByRole('button', { name: 'Unlock this note' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    // A note just made is for writing in.
+    await ways.getByRole('button', { name: 'New note', exact: false }).first().click();
+    await expect(ways.locator('.editor-toolbar')).toBeVisible();
+    await expect(ways.getByRole('button', { name: 'Lock this note' })).toBeVisible();
+    await ways.close();
+  }
+
   if (errors.length) throw new Error(`Browser errors:\n${errors.join('\n')}`);
   console.log('Visual and interaction checks passed.');
 } finally {

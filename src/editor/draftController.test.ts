@@ -186,4 +186,52 @@ describe('DraftController', () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(backend.saves).toHaveLength(0);
   });
+
+  it('lets the note be kept as it was before the first save, and only then', async () => {
+    const backend = library();
+    const order: string[] = [];
+    const controller = new DraftController(
+      note(),
+      async (input, beforeApply) => {
+        order.push('save');
+        await backend.persist(input, beforeApply);
+      },
+      650,
+      () => {
+        order.push('keep');
+        return Promise.resolve();
+      },
+    );
+    controller.update('title', 'a');
+    await controller.flush();
+    controller.update('title', 'ab');
+    await controller.flush();
+    expect(order).toEqual(['keep', 'save', 'save']);
+
+    // Put back to another form: that form is shown, nothing is unsaved,
+    // and what follows is a new beginning with its own first save.
+    controller.replace(note({ revision: 9, title: 'As it was' }));
+    expect(controller.getSnapshot()).toMatchObject({ dirty: false, saveState: 'saved' });
+    expect(controller.getSnapshot().draft.title).toBe('As it was');
+    controller.update('title', 'As it was, and more');
+    await controller.flush();
+    expect(order).toEqual(['keep', 'save', 'save', 'keep', 'save']);
+    expect(backend.saves.at(-1)?.baseRevision).toBe(9);
+  });
+
+  it('saves all the same when the note could not be kept, and tries again', async () => {
+    const backend = library();
+    const keep = vi.fn().mockRejectedValueOnce(new Error('disk')).mockResolvedValue(1);
+    const controller = new DraftController(note(), backend.persist, 650, keep);
+    controller.update('title', 'a');
+    await controller.flush();
+    expect(backend.saves).toHaveLength(1);
+    controller.update('title', 'ab');
+    await controller.flush();
+    expect(keep).toHaveBeenCalledTimes(2);
+    controller.update('title', 'abc');
+    await controller.flush();
+    expect(keep).toHaveBeenCalledTimes(2);
+    expect(backend.saves).toHaveLength(3);
+  });
 });

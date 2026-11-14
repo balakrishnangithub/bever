@@ -62,6 +62,12 @@ export function NoteList({
   const deleteNotes = useLibraryStore((state) => state.deleteNotes);
   const emptyTrash = useLibraryStore((state) => state.emptyTrash);
   const exportNotes = useLibraryStore((state) => state.exportNotes);
+  const toggleShortcut = useLibraryStore((state) => state.toggleShortcut);
+  // A search can be kept among the shortcuts, by its words.
+  const searched = filter.query.trim();
+  const searchKept = overview.shortcuts.some(
+    (item) => item.targetType === 'search' && item.targetId === searched,
+  );
 
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
@@ -212,6 +218,17 @@ export function NoteList({
             }
           }}
         />
+        {searched && (
+          <button
+            className={`search-clear search-star ${searchKept ? 'is-starred' : ''}`}
+            title={searchKept ? 'Remove this search from the shortcuts' : 'Add this search to the shortcuts'}
+            aria-label={searchKept ? 'Remove search shortcut' : 'Add search shortcut'}
+            aria-pressed={searchKept}
+            onClick={() => void toggleShortcut('search', searched, searched)}
+          >
+            <Star />
+          </button>
+        )}
         {filter.query ? (
           <button className="search-clear" onClick={() => setQuery('')} aria-label="Clear search">
             <X />

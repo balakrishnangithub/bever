@@ -5,6 +5,8 @@ import {
   Highlighter,
   Info,
   Keyboard,
+  Lock,
+  LockOpen,
   Maximize2,
   Minimize2,
   Plus,
@@ -13,6 +15,7 @@ import {
   Tag,
   TextSearch,
   Trash2,
+  Undo2,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -24,7 +27,7 @@ import { dialogs } from '../lib/dialogs';
 import { editorSession } from '../lib/editorSession';
 import { searchTerms } from '../lib/searchTerms';
 import { message, useLibraryStore } from '../store/useLibraryStore';
-import { withThumbnail, type Attributes, type Note, type Resource } from '../types';
+import { withThumbnail, type Attributes, type Note, type NoteVersion, type Resource } from '../types';
 
 interface WorkspaceProps {
   onBack: () => void;
@@ -47,6 +50,7 @@ function NoteEditor({ note, onBack, focused, onToggleFocus }: WorkspaceProps & {
   const saveNote = useLibraryStore((state) => state.saveNote);
   const setSelectedNote = useLibraryStore((state) => state.setSelectedNote);
   const refreshNotes = useLibraryStore((state) => state.refreshNotes);
+  const refreshOverview = useLibraryStore((state) => state.refreshOverview);
   const toggleShortcut = useLibraryStore((state) => state.toggleShortcut);
   const trashNotes = useLibraryStore((state) => state.trashNotes);
   const restoreNotes = useLibraryStore((state) => state.restoreNotes);
@@ -63,7 +67,24 @@ function NoteEditor({ note, onBack, focused, onToggleFocus }: WorkspaceProps & {
   const searched = useMemo(() => searchTerms(query), [query]);
   const highlight = useMemo(() => (highlightSearch ? searched : []), [highlightSearch, searched]);
 
-  const [controller] = useState(() => new DraftController(note, saveNote));
+  // The note as it was is kept before this visit's first change is saved,
+  // so that changes made by mistake can be taken back although they are
+  // saved like any others. What stands for that form is remembered here.
+  const [keptVersion, setKeptVersion] = useState<number | null>(null);
+  const [controller] = useState(
+    () =>
+      new DraftController(note, saveNote, undefined, async () =>
+        setKeptVersion(await api.keepNoteVersion(note.id)),
+      ),
+  );
+  // A note opens for writing, or for reading only where that is this
+  // device's choice; the padlock changes it for this visit. A note just
+  // made is for writing in.
+  const [locked, setLocked] = useState(() => {
+    const { openReadOnly, createdNoteId } = useLibraryStore.getState();
+    return openReadOnly && createdNoteId !== note.id;
+  });
+  const [versions, setVersions] = useState<NoteVersion[]>([]);
   const { draft, saveState, contentVersion } = useSyncExternalStore(
     controller.subscribe,
     controller.getSnapshot,
@@ -74,6 +95,7 @@ function NoteEditor({ note, onBack, focused, onToggleFocus }: WorkspaceProps & {
   const tagListId = useId();
   const titleInput = useRef<HTMLTextAreaElement>(null);
   const trashed = note.deletedAt !== null;
+  const readOnly = trashed || locked;
   const isShortcut = shortcuts.some((item) => item.targetType === 'note' && item.targetId === note.id);
 
   // The stored note changed: by this editor's save, or by something else.
@@ -155,6 +177,38 @@ function NoteEditor({ note, onBack, focused, onToggleFocus }: WorkspaceProps & {
     [adopt, controller, note.id, showError],
   );
 
+  // The forms kept of the note are listed with its information.
+  useEffect(() => {
+    if (!metadataOpen) return;
+    let stale = false;
+    void api
+      .noteVersions(note.id)
+      .then((found) => {
+        if (!stale) setVersions(found);
+      })
+      .catch(() => undefined);
+    return () => {
+      stale = true;
+    };
+  }, [metadataOpen, note.id, note.revision, keptVersion]);
+
+  /** Puts a kept form of the note back, once that is confirmed. */
+  const restore = async (version: number, title: string, text: string, confirmLabel: string) => {
+    if (!(await dialogs.confirm({ title, message: text, confirmLabel }))) return;
+    try {
+      await controller.flush().catch(() => undefined);
+      const restored = await api.restoreNoteVersion(note.id, version);
+      controller.replace(restored);
+      setSelectedNote(restored);
+      setKeptVersion(null);
+      void refreshNotes();
+      void refreshOverview();
+      showNotice('The note is as it was. What it was just now is kept under Note information.');
+    } catch (error) {
+      showError(error);
+    }
+  };
+
   const applyTimestamps = async (createdAt: number, updatedAt: number) => {
     await controller.flush();
     adopt(await api.updateNoteTimestamps(note.id, createdAt, updatedAt));
@@ -196,22 +250,61 @@ function NoteEditor({ note, onBack, focused, onToggleFocus }: WorkspaceProps & {
         <div className={`save-status ${saveState}`} aria-live="polite">
           {saveState === 'saving' ? (
             <span className="saving-spinner" />
-          ) : saveState === 'saved' ? (
-            <Check />
-          ) : (
+          ) : saveState !== 'saved' ? (
             <X />
+          ) : locked && !trashed ? (
+            <Lock />
+          ) : (
+            <Check />
           )}
           <span>
             {trashed
               ? 'In Trash'
-              : saveState === 'saving'
-                ? 'Saving…'
-                : saveState === 'saved'
-                  ? 'Saved locally'
-                  : 'Save failed'}
+              : locked && saveState === 'saved'
+                ? 'Read-only'
+                : saveState === 'saving'
+                  ? 'Saving…'
+                  : saveState === 'saved'
+                    ? 'Saved locally'
+                    : 'Save failed'}
           </span>
         </div>
+        {keptVersion !== null && !readOnly && (
+          <button
+            className="text-action discard-changes"
+            title="Put the note back as it was when you opened it"
+            onClick={() =>
+              void restore(
+                keptVersion,
+                'Discard the changes?',
+                'The note will be as it was when you opened it: its text, title, tags, details, and the date it was last changed. What it is now is kept under Note information, in case you want it back.',
+                'Discard changes',
+              )
+            }
+          >
+            <Undo2 />
+            <span>Discard changes</span>
+          </button>
+        )}
         <div className="workspace-actions">
+          {!trashed && (
+            <button
+              className={`icon-button ${locked ? 'active' : ''}`}
+              title={
+                locked
+                  ? 'Read-only: nothing can be changed by mistake. Unlock to write.'
+                  : 'Lock this note against changes'
+              }
+              aria-label={locked ? 'Unlock this note' : 'Lock this note'}
+              aria-pressed={locked}
+              onClick={() => {
+                if (!locked) void controller.flush().catch(() => undefined);
+                setLocked(!locked);
+              }}
+            >
+              {locked ? <Lock /> : <LockOpen />}
+            </button>
+          )}
           {searched.length > 0 && (
             <button
               className={`icon-button ${highlightSearch ? 'active' : ''}`}
@@ -314,7 +407,7 @@ function NoteEditor({ note, onBack, focused, onToggleFocus }: WorkspaceProps & {
             <select
               aria-label="Notebook"
               value={draft.notebookId}
-              disabled={trashed}
+              disabled={readOnly}
               onChange={(event) => controller.update('notebookId', event.target.value)}
             >
               {notebooks.map((notebook) => (
@@ -339,7 +432,7 @@ function NoteEditor({ note, onBack, focused, onToggleFocus }: WorkspaceProps & {
             placeholder="Untitled"
             rows={1}
             value={draft.title}
-            readOnly={trashed}
+            readOnly={readOnly}
             onChange={(event) => controller.update('title', event.target.value.replace(/[\r\n]+/g, ' '))}
           />
           <div className="note-tags">
@@ -347,8 +440,8 @@ function NoteEditor({ note, onBack, focused, onToggleFocus }: WorkspaceProps & {
             {draft.tags.map((tag) => (
               <button
                 key={tag}
-                title={`Remove ${tag}`}
-                disabled={trashed}
+                title={readOnly ? tag : `Remove ${tag}`}
+                disabled={readOnly}
                 onClick={() =>
                   controller.update(
                     'tags',
@@ -357,10 +450,10 @@ function NoteEditor({ note, onBack, focused, onToggleFocus }: WorkspaceProps & {
                 }
               >
                 {tag}
-                {!trashed && <X />}
+                {!readOnly && <X />}
               </button>
             ))}
-            {!trashed && (
+            {!readOnly && (
               <>
                 <input
                   aria-label="Add a tag"
@@ -387,7 +480,7 @@ function NoteEditor({ note, onBack, focused, onToggleFocus }: WorkspaceProps & {
           </div>
           <RichEditor
             note={{ ...note, contentHtml: draft.contentHtml }}
-            editable={!trashed}
+            editable={!readOnly}
             contentVersion={contentVersion}
             highlight={highlight}
             onChange={(html) => controller.update('contentHtml', html)}
@@ -407,7 +500,16 @@ function NoteEditor({ note, onBack, focused, onToggleFocus }: WorkspaceProps & {
           <MetadataPanel
             note={note}
             attributes={draft.attributes}
-            readOnly={trashed}
+            readOnly={readOnly}
+            versions={versions}
+            onRestore={(version) =>
+              void restore(
+                version.id,
+                'Put this version back?',
+                `The note will be as it was on ${formatWhen(version.keptAt)}: its text, title, tags, details, and the date it was last changed. What it is now is kept in this list, in case you want it back.`,
+                'Put it back',
+              )
+            }
             onChange={(attributes) => controller.update('attributes', attributes)}
             onApplyTimestamps={applyTimestamps}
             onClose={() => setMetadataOpen(false)}
@@ -424,6 +526,7 @@ function KeyboardShortcuts({ onClose }: { onClose: () => void }) {
     ['Create a note', 'Ctrl / Cmd + N'],
     ['Search the whole library', 'Ctrl / Cmd + K or Ctrl / Cmd + Shift + F'],
     ['Find in this note', 'Ctrl / Cmd + F'],
+    ['Go back or forward among the places you have been', 'Alt + ← or Alt + →'],
     ['Expand the note, or show the lists again', 'Ctrl / Cmd + \\'],
     ['Bold, italic, underline', 'Ctrl / Cmd + B, I, U'],
     ['Undo or redo', 'Ctrl / Cmd + Z or Ctrl / Cmd + Shift + Z'],
@@ -482,6 +585,8 @@ function MetadataPanel({
   note,
   attributes,
   readOnly,
+  versions,
+  onRestore,
   onChange,
   onApplyTimestamps,
   onClose,
@@ -489,6 +594,9 @@ function MetadataPanel({
   note: Note;
   attributes: Attributes;
   readOnly: boolean;
+  /** The forms kept of the note before it was changed, the newest first. */
+  versions: NoteVersion[];
+  onRestore: (version: NoteVersion) => void;
   onChange: (value: Attributes) => void;
   onApplyTimestamps: (createdAt: number, updatedAt: number) => Promise<void>;
   onClose: () => void;
@@ -517,6 +625,32 @@ function MetadataPanel({
         readOnly={readOnly}
         onApply={onApplyTimestamps}
       />
+      <section className="note-versions" aria-label="Earlier versions">
+        <h3>Earlier versions</h3>
+        {versions.length === 0 ? (
+          <p>
+            None yet. Before a note is changed, Bever keeps it as it was, on this device. The last five are
+            listed here, to be put back.
+          </p>
+        ) : (
+          <ul>
+            {versions.map((version) => (
+              <li key={version.id}>
+                <div>
+                  <time dateTime={new Date(version.keptAt).toISOString()}>{formatWhen(version.keptAt)}</time>
+                  <span>
+                    <strong>{version.title || 'Untitled'}</strong>
+                    {version.preview ? ` · ${version.preview}` : ''}
+                  </span>
+                </div>
+                <button disabled={readOnly} onClick={() => onRestore(version)}>
+                  Put back
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
       {EDITABLE_ATTRIBUTES.map(([key, label]) => (
         <label key={key}>
           {label}
@@ -641,6 +775,17 @@ function TimestampEditor({
       {status && <p role="status">{status}</p>}
     </form>
   );
+}
+
+/** A moment, as a person would say it: the day and the time. */
+function formatWhen(timestamp: number) {
+  return new Date(timestamp).toLocaleString([], {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function localDateTimeValue(timestamp: number) {

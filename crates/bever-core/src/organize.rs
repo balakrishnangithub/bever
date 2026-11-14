@@ -19,13 +19,13 @@ use crate::{
 impl Library {
     pub fn ensure_notebook(&self, name: &str, stack_id: Option<&str>) -> Result<String> {
         let name = normalized_name(name)?;
-        let connection = self.connection.lock().expect("database mutex poisoned");
+        let connection = self.connection.lock();
         ensure_notebook_with(&connection, name, stack_id)
     }
 
     pub fn rename_notebook(&self, id: &str, name: &str) -> Result<()> {
         let name = normalized_name(name)?;
-        let mut connection = self.connection.lock().expect("database mutex poisoned");
+        let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         let taken = transaction
             .prepare("SELECT 1 FROM notebooks WHERE name = ?1 COLLATE NOCASE AND id != ?2")?
@@ -51,7 +51,7 @@ impl Library {
     /// note needs a notebook, into the default one. Returns how many notes
     /// were moved. The last remaining notebook cannot be deleted.
     pub fn delete_notebook(&self, id: &str) -> Result<u64> {
-        let mut connection = self.connection.lock().expect("database mutex poisoned");
+        let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         let exists = transaction
             .prepare("SELECT 1 FROM notebooks WHERE id = ?1")?
@@ -78,7 +78,7 @@ impl Library {
         notebook_id: &str,
         stack_id: Option<&str>,
     ) -> Result<Notebook> {
-        let connection = self.connection.lock().expect("database mutex poisoned");
+        let connection = self.connection.lock();
         let changed = connection.execute(
             "UPDATE notebooks SET stack_id = ?2, updated_at = ?3, revision = revision + 1 WHERE id = ?1",
             params![notebook_id, stack_id, Utc::now().timestamp_millis()],
@@ -113,7 +113,7 @@ impl Library {
             updated_at: now,
             revision: 1,
         };
-        let connection = self.connection.lock().expect("database mutex poisoned");
+        let connection = self.connection.lock();
         let taken = connection
             .prepare("SELECT 1 FROM stacks WHERE name = ?1 COLLATE NOCASE")?
             .exists([name])?;
@@ -133,7 +133,7 @@ impl Library {
     pub fn ensure_stack(&self, name: &str) -> Result<String> {
         let name = normalized_name(name)?;
         let existing = {
-            let connection = self.connection.lock().expect("database mutex poisoned");
+            let connection = self.connection.lock();
             connection
                 .query_row(
                     "SELECT id FROM stacks WHERE name = ?1 COLLATE NOCASE",
@@ -150,7 +150,7 @@ impl Library {
 
     pub fn rename_stack(&self, id: &str, name: &str) -> Result<()> {
         let name = normalized_name(name)?;
-        let mut connection = self.connection.lock().expect("database mutex poisoned");
+        let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         let taken = transaction
             .prepare("SELECT 1 FROM stacks WHERE name = ?1 COLLATE NOCASE AND id != ?2")?
@@ -174,7 +174,7 @@ impl Library {
 
     /// Deletes a stack; its notebooks stay and become unstacked.
     pub fn delete_stack(&self, id: &str) -> Result<()> {
-        let mut connection = self.connection.lock().expect("database mutex poisoned");
+        let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         let now = Utc::now().timestamp_millis();
         // Recorded as a notebook change so the unstacking reaches other devices.
@@ -197,7 +197,7 @@ impl Library {
     /// nested: a tag that exists is returned as it is, where it is.
     pub fn create_tag(&self, name: &str, parent_id: Option<&str>) -> Result<Tag> {
         let name = normalized_name(name)?;
-        let connection = self.connection.lock().expect("database mutex poisoned");
+        let connection = self.connection.lock();
         let existing = connection
             .query_row(
                 "SELECT id FROM tags WHERE name = ?1 COLLATE NOCASE ORDER BY parent_id IS ?2 DESC LIMIT 1",
@@ -222,7 +222,7 @@ impl Library {
 
     pub fn rename_tag(&self, id: &str, name: &str) -> Result<()> {
         let name = normalized_name(name)?;
-        let mut connection = self.connection.lock().expect("database mutex poisoned");
+        let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         tag_with(&transaction, id)?;
         let taken = transaction
@@ -253,7 +253,7 @@ impl Library {
     /// [`Library::nest_tags_as`] tells a tag arranged here from one that
     /// only arrived.
     pub fn set_tag_parent(&self, id: &str, parent_id: Option<&str>) -> Result<()> {
-        let mut connection = self.connection.lock().expect("database mutex poisoned");
+        let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         let tag = tag_with(&transaction, id)?;
         if let Some(parent) = parent_id {
@@ -280,7 +280,7 @@ impl Library {
     /// here: what was arranged in this library stays as it is. Returns how
     /// many tags were placed.
     pub fn nest_tags_as(&self, parents: &HashMap<String, String>) -> Result<u64> {
-        let mut connection = self.connection.lock().expect("database mutex poisoned");
+        let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         let now = Utc::now().timestamp_millis();
         let mut waiting = transaction
@@ -337,7 +337,7 @@ impl Library {
     /// Deletes a tag, removing it from every note. Tags inside it are kept
     /// and move up to where it was.
     pub fn delete_tag(&self, id: &str) -> Result<()> {
-        let mut connection = self.connection.lock().expect("database mutex poisoned");
+        let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         let tag = tag_with(&transaction, id)?;
         let tree = [id.to_owned()];
@@ -364,10 +364,17 @@ impl Library {
     /// Adds the shortcut when absent and removes it when present. Returns
     /// whether the shortcut now exists.
     pub fn toggle_shortcut(&self, target_type: &str, target_id: &str, label: &str) -> Result<bool> {
-        if !matches!(target_type, "note" | "notebook" | "stack" | "tag") {
+        // A search is a shortcut by its words: they are its target.
+        if !matches!(
+            target_type,
+            "note" | "notebook" | "stack" | "tag" | "search"
+        ) {
             return Err(BeverError::Invalid("unknown shortcut type".into()));
         }
-        let mut connection = self.connection.lock().expect("database mutex poisoned");
+        if target_id.trim().is_empty() {
+            return Err(BeverError::Invalid("a shortcut needs a target".into()));
+        }
+        let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
         let now = Utc::now().timestamp_millis();
         let removed = remove_shortcut(&transaction, target_type, target_id, now, true)?;
@@ -385,9 +392,87 @@ impl Library {
         Ok(!removed)
     }
 
+    /// Adds the shortcuts another application has, in its order, after the
+    /// ones that are here. One is added when what it points to is in this
+    /// library and outside the trash, when there is no shortcut to it yet,
+    /// and when no shortcut to it was removed here: what was taken away in
+    /// this library is not brought back. Returns how many were added.
+    pub fn add_shortcuts_as(&self, wanted: &[ForeignShortcut]) -> Result<u64> {
+        let mut connection = self.connection.lock();
+        let transaction = connection.transaction()?;
+        let now = Utc::now().timestamp_millis();
+        let mut order: i64 = transaction.query_row(
+            "SELECT COALESCE(max(sort_order), 0) FROM shortcuts",
+            [],
+            |row| row.get(0),
+        )?;
+        let named = |table: &str, name: &str| -> Result<Option<(String, String)>> {
+            Ok(transaction
+                .query_row(
+                    &format!("SELECT id, name FROM {table} WHERE name = ?1 COLLATE NOCASE LIMIT 1"),
+                    [name.trim()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?)
+        };
+        let mut added = 0;
+        for shortcut in wanted {
+            let (kind, target) = match shortcut {
+                ForeignShortcut::Note { evernote_guid } => (
+                    "note",
+                    transaction
+                        .query_row(
+                            "SELECT id, title FROM notes WHERE evernote_guid = ?1 AND deleted_at IS NULL
+                             ORDER BY updated_at DESC LIMIT 1",
+                            [evernote_guid],
+                            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                        )
+                        .optional()?
+                        .map(|(id, title)| {
+                            let title = title.trim();
+                            (id, if title.is_empty() { "Untitled" } else { title }.to_owned())
+                        }),
+                ),
+                ForeignShortcut::Notebook { name } => ("notebook", named("notebooks", name)?),
+                ForeignShortcut::Stack { name } => ("stack", named("stacks", name)?),
+                ForeignShortcut::Tag { name } => ("tag", named("tags", name)?),
+                ForeignShortcut::Search { query, label } => {
+                    let (query, label) = (query.trim(), label.trim());
+                    let label = if label.is_empty() { query } else { label };
+                    (
+                        "search",
+                        (!query.is_empty()).then(|| (query.to_owned(), label.to_owned())),
+                    )
+                }
+            };
+            let Some((id, label)) = target else {
+                continue;
+            };
+            let removed_here = transaction
+                .prepare_cached(
+                    "SELECT 1 FROM sync_tombstones WHERE kind = 'shortcut' AND id = ?1",
+                )?
+                .exists([shortcut_key(kind, &id)])?;
+            if removed_here {
+                continue;
+            }
+            let inserted = transaction.execute(
+                "INSERT OR IGNORE INTO shortcuts(id, target_type, target_id, label, sort_order, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![Uuid::new_v4().to_string(), kind, id, label, order + 1, now],
+            )?;
+            if inserted > 0 {
+                order += 1;
+                added += 1;
+            }
+        }
+        transaction.commit()?;
+        Ok(added)
+    }
+
     /// Deleted stacks, notebooks, tags, and shortcuts awaiting synchronization.
     pub fn metadata_tombstones(&self) -> Result<Vec<Tombstone>> {
-        let connection = self.connection.lock().expect("database mutex poisoned");
+        let connection = self.connection.lock();
         let tombstones = connection
             .prepare("SELECT kind, id, deleted_at FROM sync_tombstones WHERE kind != 'note' ORDER BY kind, id")?
             .query_map([], |row| {
@@ -400,6 +485,29 @@ impl Library {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(tombstones)
     }
+}
+
+/// A shortcut another application has, by what it points to there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ForeignShortcut {
+    /// A note, by the identifier Evernote gives it.
+    Note {
+        evernote_guid: String,
+    },
+    Notebook {
+        name: String,
+    },
+    Stack {
+        name: String,
+    },
+    Tag {
+        name: String,
+    },
+    /// A search that was saved, with the name it was saved under.
+    Search {
+        query: String,
+        label: String,
+    },
 }
 
 pub(crate) fn shortcut_key(target_type: &str, target_id: &str) -> String {
@@ -733,7 +841,12 @@ mod tests {
             .toggle_shortcut("notebook", &inbox, "Inbox")
             .unwrap());
         assert!(tombstones(&library).is_empty());
-        assert!(library.toggle_shortcut("search", "x", "x").is_err());
+        assert!(library.toggle_shortcut("window", "x", "x").is_err());
+        // A search is a shortcut by its words.
+        assert!(library
+            .toggle_shortcut("search", "tag:recipes soup", "Soups")
+            .unwrap());
+        assert!(library.toggle_shortcut("search", " ", "Nothing").is_err());
     }
 
     #[test]

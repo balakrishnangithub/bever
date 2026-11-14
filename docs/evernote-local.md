@@ -81,7 +81,7 @@ A note deleted in Evernote is not removed here. Importing is not synchronization
 - **What Evernote does not have on the computer cannot be read.** A note whose text or attachment is not there is named in the dialog, with its notebook and what is missing, and left out whole. Letting Evernote synchronize longer does not always bring it: Evernote 11 was seen to be refused an attachment by its service once (`status code 401`), to log "skipping and setting as downloaded", and never to ask again. Opening the note itself in Evernote while online fetched it, and the next import took the note.
 - **A note can be taken without the attachments that are missing**, when asked for in the dialog. Its text still names them, and a picture among them is shown as missing. Such a form is imported only where the library has none of the note, or in place of an earlier one that has no attachment it lacks; it is never put beside a note that was changed here. The whole note, imported later, takes its place although Evernote gives both the same time of change; a form changed here in the meantime is kept, and the whole one added beside it. A note without its text cannot be imported.
 - **Evernote's own format.** None of this is published. It is what Evernote 11.41 writes. Data in another form is reported as unknown and nothing is imported from it.
-- **As with ENEX:** notes in the trash, tasks, and shortcuts are not imported.
+- **As with ENEX:** notes in the trash and tasks are not imported.
 
 ## Tags inside tags
 
@@ -92,3 +92,13 @@ An export gives a note's tags by name and says nothing of which tag is inside wh
 - every tag of the library is looked at, not only those of the notebooks chosen, so importing any one notebook nests the tags of the whole library.
 
 Notes are not changed by this, and are not synchronized again for it.
+
+## Shortcuts
+
+An export has no shortcuts either. Evernote's files do (`Nodes_Shortcut`, and `Nodes_SavedSearch` for the searches among them), and an import from them adds the ones Evernote has, after those that are here and in Evernote's order:
+
+- a shortcut to a note, a notebook, a stack, or a tag is added when that note, notebook, stack, or tag is in the library and outside the trash; a saved search is added as a search, with the name it was saved under;
+- every shortcut is looked at, not only those into the notebooks chosen;
+- one that is here already is not added twice, and one that was removed here is not brought back.
+
+Evernote's searches are written as Bever's are for the most part; an operator Bever does not know is said to be unknown when the shortcut is used.

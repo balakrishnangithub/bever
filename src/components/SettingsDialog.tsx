@@ -5,6 +5,7 @@ import {
   CloudCheck,
   HardDrive,
   ImageOff,
+  Lock,
   RefreshCw,
   ScanText,
   ShieldCheck,
@@ -39,6 +40,8 @@ export function SettingsDialog({
   const settings = useLibraryStore((state) => state.settings);
   const setSetting = useLibraryStore((state) => state.setSetting);
   const ocr = useLibraryStore((state) => state.ocr);
+  const openReadOnly = useLibraryStore((state) => state.openReadOnly);
+  const setOpenReadOnly = useLibraryStore((state) => state.setOpenReadOnly);
   const appInfo = useLibraryStore((state) => state.appInfo);
   const [status, setStatus] = useState<PCloudStatus | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -442,6 +445,25 @@ export function SettingsDialog({
                   onChange={(event) => void setSetting('load_remote_images', event.target.checked)}
                 />
                 Always load images from the web
+              </label>
+            </div>
+          </section>
+          <section className="settings-card">
+            <Lock />
+            <div>
+              <h3>Changes made by mistake</h3>
+              <p>
+                Notes save by themselves. Before a note is changed, Bever keeps it as it was: “Discard
+                changes” in the note puts it back, and the last five such versions are listed under Note
+                information. They stay on this device.
+              </p>
+              <label className="ocr-setting">
+                <input
+                  type="checkbox"
+                  checked={openReadOnly}
+                  onChange={(event) => setOpenReadOnly(event.target.checked)}
+                />
+                Open notes read-only; the padlock in a note unlocks it
               </label>
             </div>
           </section>

@@ -21,7 +21,9 @@ Bever is an independent project. It is not affiliated with, endorsed by, or spon
 - Notes, notebooks, notebook stacks, tags, shortcuts, and a trash that can be restored from or emptied.
 - Create, rename, and delete notebooks, stacks, and tags. Deleting a notebook moves its notes to the trash.
 - Move, copy, tag, untag, trash, restore, delete, and export several notes at once.
-- Shortcuts to notes, notebooks, stacks, and tags; note counts in the sidebar.
+- Shortcuts to notes, notebooks, stacks, tags, and searches; note counts in the sidebar.
+- Back and forward among the notes and the lists you have been at, as in a browser: the arrows beside the name, Alt+Left and Alt+Right, or the side buttons of a mouse.
+- The order you choose for the list of notes, and for the notebooks and the tags on their screens, is remembered on the device.
 - The list of notes shows each note by its largest picture, or by the one you choose from a picture's menu (**Use as note thumbnail**).
 - Tags nest inside tags, as deep as you like, and a notebook belongs to a stack; both are shown as they are, and names are listed with their numbers read as numbers (`note-2` before `note-10`).
 - **Notebooks** and **Tags** each have a screen of their own, reached from their heading in the sidebar: find one by name, see how many notes it has, and rename, move, or delete it.
@@ -36,6 +38,7 @@ Bever is an independent project. It is not affiliated with, endorsed by, or spon
 - Annotations on pictures: arrows, shapes, text, stamps, pen, and highlighter. Annotations made in Evernote open as separate marks that can be moved, reworded, and removed, and new ones are stored the same way.
 - A note can be expanded to the whole window (Ctrl+\\), putting the notebooks and the list of notes away.
 - Automatic saving. If a note changes underneath an open editor, your version is kept beside it as a conflict copy.
+- A guard against changing a note by mistake: the padlock makes a note read-only; **Discard changes** puts it back as it was when you opened it; and the last five earlier versions of a note are kept on the device, under **Note information**, to be put back. Notes can be made to open read-only.
 - A click on a link while writing offers to open, edit, copy, or remove it; Ctrl+click opens it at once.
 - Editable created and updated dates, source URL, and author.
 
@@ -47,10 +50,11 @@ Bever is an independent project. It is not affiliated with, endorsed by, or spon
 - Checklists, highlights, code blocks, encrypted blocks, and links between notes are understood.
 - Web clippings, and laid-out HTML pasted into a note such as rendered mathematics, are shown with their own layout and can be made editable.
 - Importing the same file twice does not create duplicates.
+- Importing from the Evernote application on the same computer also brings its stacks, the nesting of its tags, and its shortcuts.
 
 **Search**
 
-- Offline full-text search over titles, text, tags, notebooks, attachment names, and text recognised in images. What was typed is looked for in titles first: a note named so comes before notes that only mention the words, however often. The passage that answers the search is shown. A search that finds nothing as typed is made again with the words of the library that are spelt nearly so (a letter missing, too many, or wrong, or two letters swapped), and says which it took.
+- Offline full-text search over titles, text, tags, notebooks, attachment names, and text recognised in images. What was found is ordered by where the words are: in the title first, then in the notebook's name, then in the tags, then in the text; and within each, notes that have the words in the order typed and close together come first (“my apple” before “my friend's apple” before “apple of my eye”). The passage that answers the search is shown. A search that finds nothing as typed is made again with the words of the library that are spelt nearly so (a letter missing, too many, or wrong, or two letters swapped), and says which it took.
 - A note opened from a search shows what the search found: in its text, and in its pictures, where the words are marked in their places. The marks can be switched off in the note's header.
 - Find in a note (Ctrl+F, or the button in the note's header) steps through its text and the text recognised in its pictures.
 - Evernote-style operators and a filter panel for tags, dates, and content types.

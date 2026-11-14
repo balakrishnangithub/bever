@@ -45,6 +45,7 @@ use serde_json::{Map, Value};
 use crate::{
     enex::{BlobSink, EnexNote, EnexResource},
     error::{BeverError, Result},
+    organize::ForeignShortcut,
     repository::ImportNoteResult,
     ydoc::{Any, XmlNode, YDoc},
     Library,
@@ -164,6 +165,8 @@ pub struct LocalImportReport {
     pub links_resolved: u64,
     /// Tags placed under the tags they are under in Evernote.
     pub tags_nested: u64,
+    /// Shortcuts Evernote has that were added here.
+    pub shortcuts_added: u64,
     pub cancelled: bool,
     pub warnings: Vec<String>,
 }
@@ -497,6 +500,48 @@ impl EvernoteAccount {
             }
         }
         Ok(parents)
+    }
+
+    /// The shortcuts Evernote has, in its order. Empty when this version
+    /// of Evernote's data does not say.
+    fn shortcuts(&self, connection: &Connection) -> Result<Vec<ForeignShortcut>> {
+        let Ok(mut statement) = connection.prepare(
+            "SELECT s.source_Note_id, nb.label, s.source_Stack_id, t.label, q.query, q.label
+             FROM Nodes_Shortcut s
+             LEFT JOIN Nodes_Notebook nb ON nb.id = s.source_Notebook_id
+             LEFT JOIN Nodes_Tag t ON t.id = s.source_Tag_id
+             LEFT JOIN Nodes_SavedSearch q ON q.id = s.source_SavedSearch_id
+             ORDER BY s.sortOrder, s.rowid",
+        ) else {
+            return Ok(Vec::new());
+        };
+        let text = |row: &rusqlite::Row, column: usize| -> rusqlite::Result<Option<String>> {
+            Ok(row
+                .get::<_, Option<String>>(column)?
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()))
+        };
+        let rows = statement.query_map([], |row| {
+            Ok(if let Some(evernote_guid) = text(row, 0)? {
+                Some(ForeignShortcut::Note { evernote_guid })
+            } else if let Some(name) = text(row, 1)? {
+                Some(ForeignShortcut::Notebook { name })
+            } else if let Some(name) = text(row, 2)?.as_deref().and_then(stack_name) {
+                Some(ForeignShortcut::Stack { name })
+            } else if let Some(name) = text(row, 3)? {
+                Some(ForeignShortcut::Tag { name })
+            } else {
+                text(row, 4)?.map(|query| ForeignShortcut::Search {
+                    label: text(row, 5).ok().flatten().unwrap_or_default(),
+                    query,
+                })
+            })
+        })?;
+        Ok(rows
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect())
     }
 
     fn tags(&self, connection: &Connection, note_id: &str) -> Result<Vec<String>> {
@@ -1073,6 +1118,9 @@ pub fn import_local(
     // say which tag is inside which, and the tags that came are placed so.
     if !report.cancelled {
         report.tags_nested = library.nest_tags_as(&account.tag_parents(&connection)?)?;
+        // Nor does an export have the shortcuts. Those whose notes,
+        // notebooks, stacks and tags are here now are added.
+        report.shortcuts_added = library.add_shortcuts_as(&account.shortcuts(&connection)?)?;
     }
     library.optimize()?;
     state.phase = "complete".into();

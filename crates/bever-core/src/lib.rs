@@ -14,6 +14,7 @@ pub mod repository;
 pub mod resources;
 pub mod search;
 pub mod sync;
+pub mod versions;
 pub mod ydoc;
 
 pub use db::Library;

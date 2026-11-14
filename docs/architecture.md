@@ -30,7 +30,8 @@ The browser adapter in `src/lib/browserApi.ts` exists only to exercise the inter
 - `repository.rs`: notes — create, save, list, copy, trash, delete, import, and the search-index entry of each.
 - `organize.rs`: notebooks, stacks, tags, and shortcuts, including the deletion records that synchronization carries.
 - `resources.rs`: attachments of a note and the text-recognition queue.
-- `search.rs`: parsed query operators and parameterized SQL.
+- `search.rs`: parsed query operators, parameterized SQL, and the order of what a search found.
+- `versions.rs`: a note as it was before the editor changed it, kept on the device to be put back.
 - `blob.rs`: SHA-256 and Evernote MD5 calculation, deduplication, streamed storage, verified reads.
 - `enml.rs`: ENML to editable HTML and back, text extraction, link rewriting.
 - `enex.rs`: streaming reader, importer, and exporter.
@@ -40,7 +41,7 @@ The browser adapter in `src/lib/browserApi.ts` exists only to exercise the inter
 
 ## Shell modules
 
-- `lib.rs`: application state, wiring, window close and tray behaviour.
+- `lib.rs`: application state, wiring, window close and tray behaviour, and that one application runs for a library.
 - `commands.rs`: library commands. Each runs on a blocking thread, never on the UI thread.
 - `files.rs`: everything that touches the user's files — native file dialogs, import, export, attaching, saving and opening attachments, opening links.
 - `protocol.rs`: the `bever:` protocol.
@@ -72,7 +73,10 @@ Note content is untrusted: it comes from imported files and from other devices. 
 7. Conflicting local edits are copied before a remote version replaces them. A save from an editor names the revision it started from; if the note has moved on, the text is saved as a conflict copy.
 8. An attachment file is removed only when no note refers to it, and never while an import or a download that may be about to refer to it is in progress. A read/write gate (`blob_gate`) enforces this.
 
-SQLite uses WAL mode, `synchronous=NORMAL`, foreign keys, a busy timeout, and targeted indexes. There is one schema and nothing that brings a library made by another version up to it. FTS5 uses Unicode tokenization and BM25 ranking. The tokenizer is not a CJK trigram tokenizer; adding one would need benchmarks.
+9. The search index is derived from the notes and holds nothing they do not. It is made anew when the file has it in another form, or when it does not account for its rows. `note_index` says which row of the index is which note's, so that a note's entry is found without reading the index through; two triggers keep the notebook's name in the index right when a notebook is renamed or a note moved, whatever part of the program does it.
+10. Before the first save of each visit to a note, the editor has the note kept as it was (`note_versions`, five to a note). These stay on the device: they are neither synchronized nor exported, and go with the note when it is deleted for good.
+
+SQLite uses WAL mode, `synchronous=NORMAL`, foreign keys, a busy timeout, and targeted indexes. A library made by 1.0.0 is opened as it is: what was added since is in tables of its own, made when they are missing, and the index is made anew. FTS5 uses Unicode tokenization and BM25 ranking. The tokenizer is not a CJK trigram tokenizer; adding one would need benchmarks.
 
 ## Editor
 
@@ -83,11 +87,19 @@ Saving is serialized by `draftController.ts`: one save at a time, each carrying 
 ## Performance boundaries
 
 - Note lists are virtualized and loaded a page at a time; the header shows the real total.
-- Search executes in SQLite. Text terms go into a single FTS `MATCH`, which is what makes ranking and snippets available.
+- Search executes in SQLite. Text terms go into a single FTS `MATCH`, which is what makes ranking and snippets available. What was found is ordered by where the words stand: the title, the notebook's name and the tags are read from the index's own row, where they are stored before the note's text; how near the words are to each other in the text is read from the index's record of where each word stands, up to 60,000 places a search, past which the index's own measure orders those notes.
+- Changing a note costs the same however many notes there are: its entry in the index is found through `note_index`.
 - ENEX attachments are decoded and hashed as a stream. Only one note's ENML is in memory at a time.
 - Text recognition runs after an import, on its own worker, and can be paused.
 - Attachments are served to the WebView in ranges of at most 4 MiB, so media can seek without loading a whole file.
 - Synchronization transfers four items at a time, streams attachments, and decides from flags which notes need uploading, so an idle run loads no note.
+
+## Failures
+
+- One thread at a time has the database connection. A thread that panics while it has it does not take it from the others: what it had begun in a transaction is undone as the transaction is dropped, and the next operation finds the connection as it was (`db.rs`, `Shared`).
+- One application runs for one library. Started again, the one that is running comes to the front; two would each show the notes as they last read them and save over each other. A library named by `BEVER_DATA_DIR` is another application and runs beside it.
+- A part of the interface that fails to draw is replaced by a message (`ErrorBoundary.tsx`): a note that cannot be drawn leaves the lists usable, and a failure of the whole offers to start the interface again. The notes are not touched by either.
+- The editor's own guard against a change made by mistake is in "Persistence invariants", 10, and in `draftController.ts`, which has the note kept before its first save.
 
 ## Sync worker lifetime
 

@@ -2,13 +2,7 @@ import { listen } from '@tauri-apps/api/event';
 import { create } from 'zustand';
 
 import { api, canImportFromEvernote } from '../lib/api';
-import {
-  emptyFilter,
-  type EvernoteAccount,
-  type ImportOutcome,
-  type ImportProgress,
-  type PickedFile,
-} from '../types';
+import { type EvernoteAccount, type ImportOutcome, type ImportProgress, type PickedFile } from '../types';
 import { message, useLibraryStore } from './useLibraryStore';
 
 /** How often the note list is refreshed while notes are arriving. */
@@ -142,7 +136,7 @@ export const useImportStore = create<ImportState>((set, get) => ({
         lastRefresh = Date.now();
         void library()
           .refreshOverview()
-          .then(() => library().setFilter({ ...emptyFilter, notebookId: progress.notebookId }));
+          .then(() => library().openView({ notebookId: progress.notebookId }));
       } else if (Date.now() - lastRefresh >= REFRESH_INTERVAL_MS) {
         lastRefresh = Date.now();
         void library().refreshNotes();
@@ -222,7 +216,7 @@ export const useImportStore = create<ImportState>((set, get) => ({
         lastRefresh = Date.now();
         void library()
           .refreshOverview()
-          .then(() => library().setFilter({ ...emptyFilter, notebookId: progress.notebookId }));
+          .then(() => library().openView({ notebookId: progress.notebookId }));
       } else if (Date.now() - lastRefresh >= REFRESH_INTERVAL_MS) {
         lastRefresh = Date.now();
         void library().refreshNotes();

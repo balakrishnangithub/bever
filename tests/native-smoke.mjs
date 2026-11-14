@@ -90,6 +90,12 @@ const evernote = join(work, 'Evernote');
     INSERT INTO Nodes_Tag VALUES ('tag-1', 'smoke-tag');
     INSERT INTO NoteTag VALUES ('1', '${note}', 'tag-1');
     INSERT INTO Attachment VALUES ('att-1', 'notes.txt', 'text/plain', 0, 0, 1, '${hash}', 16, '[]', NULL, 's1', '${note}');
+    CREATE TABLE Nodes_SavedSearch(id TEXT, query TEXT, label TEXT);
+    CREATE TABLE Nodes_Shortcut(id TEXT, sortOrder TEXT, source_Stack_id TEXT, source_Note_id TEXT,
+      source_Notebook_id TEXT, source_Tag_id TEXT, source_SavedSearch_id TEXT, label TEXT);
+    INSERT INTO Nodes_Shortcut VALUES
+      ('s-1', 'V', NULL, '${note}', NULL, NULL, NULL, ''),
+      ('s-2', 'M', NULL, NULL, 'nb-1', NULL, NULL, '');
   `);
   database.close();
   const body = join(evernote, 'conduit-fs', site, 'someone', 'rte', 'Note', 'internal_rteDoc', '111', '555');
@@ -314,6 +320,42 @@ try {
   await expect(page.getByRole('heading', { name: 'Native smoke note, renamed in a hurry' })).toBeVisible();
   check('an edit made just before leaving a note is saved');
 
+  // Changes made by mistake are taken back, although they were saved.
+  await page.getByRole('heading', { name: 'Native smoke note, renamed in a hurry' }).click();
+  await expect(page.getByLabel('Note title')).toHaveValue('Native smoke note, renamed in a hurry');
+  const asItWas = await page.locator('.note-prose').innerText();
+  await page.getByLabel('Note title').fill('Spoilt by mistake');
+  await expect(page.getByRole('heading', { name: 'Spoilt by mistake' })).toBeVisible({ timeout: 15000 });
+  await page.getByRole('button', { name: 'Discard changes' }).click();
+  await page
+    .getByRole('dialog', { name: 'Discard the changes?' })
+    .getByRole('button', { name: 'Discard changes' })
+    .click();
+  await expect(page.getByLabel('Note title')).toHaveValue('Native smoke note, renamed in a hurry');
+  await expect(page.getByRole('heading', { name: 'Native smoke note, renamed in a hurry' })).toBeVisible();
+  expect(await page.locator('.note-prose').innerText()).toBe(asItWas);
+  // What was discarded is kept, with the note as it was before.
+  await page.getByRole('button', { name: 'Note information' }).click();
+  await expect(page.getByRole('region', { name: 'Earlier versions' }).locator('li')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Close note information' }).click();
+  // Locked, the note takes nothing that is typed.
+  await page.getByRole('button', { name: 'Lock this note' }).click();
+  await page.locator('.note-prose').click();
+  await page.keyboard.type('typed by mistake');
+  expect(await page.locator('.note-prose').innerText()).toBe(asItWas);
+  await page.getByRole('button', { name: 'Unlock this note' }).click();
+  check('changes made by mistake are discarded and kept, and a locked note takes none');
+
+  // Back and forward among the places one has been.
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await expect(page.getByLabel('Note title')).toHaveValue('');
+  await page.getByRole('button', { name: 'Forward', exact: true }).click();
+  await expect(page.getByLabel('Note title')).toHaveValue('Native smoke note, renamed in a hurry');
+  check('back and forward return to the notes that were open');
+  // What follows is written in the new, empty note.
+  await page.getByRole('button', { name: 'Back', exact: true }).click();
+  await expect(page.getByLabel('Note title')).toHaveValue('');
+
   // Full-text search with prefix matching and a marked match.
   await page.getByLabel('Search notes').fill('zebraf observ');
   await expect(page.locator('.note-card')).toHaveCount(1);
@@ -435,7 +477,9 @@ try {
     timeout: 30000,
   });
   await finished.getByRole('button', { name: 'Done' }).click();
-  await expect(page.locator('.notebook-row', { hasText: 'Smoke travel' })).toBeVisible();
+  await expect(
+    page.locator('.sidebar-section').nth(1).locator('.notebook-row', { hasText: 'Smoke travel' }),
+  ).toBeVisible();
   await expect(page.locator('.sidebar').getByText('Smoke stack', { exact: true })).toBeVisible();
   await page
     .locator('.primary-nav')
@@ -446,6 +490,15 @@ try {
   await expect(page.locator('.note-prose')).toContainText('Hello & goodbye');
   await expect(page.locator('.note-prose')).toContainText('notes.txt');
   check('a notebook is imported from the Evernote application’s files, with its stack, note, and attachment');
+  // The shortcuts Evernote has came along, in its order.
+  const shortcutNames = page.locator('.sidebar-section').first().locator('.tree-row span');
+  await expect(shortcutNames).toHaveText(['Smoke travel', 'First note']);
+  // The notebook's name answers a search, and such a note comes after one
+  // whose title has the word.
+  await page.getByLabel('Search notes').fill('smoke travel');
+  await expect(page.getByRole('heading', { name: 'First note', exact: true })).toHaveCount(1);
+  await page.getByLabel('Clear search').click();
+  check('shortcuts come from Evernote, and a notebook’s name answers a search');
   // Once more: nothing is imported twice.
   await page.getByRole('button', { name: 'Import notes' }).click();
   await page

@@ -199,7 +199,22 @@ fn data_directory(app: &tauri::App) -> Result<std::path::PathBuf, Box<dyn std::e
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // One Bever for one library. Two would each show the notes as they last
+    // read them and save over what the other wrote; and while a
+    // synchronization keeps Bever running without its window, starting it
+    // again is the natural thing to do. So the one that is running comes to
+    // the front instead. A library of its own (`BEVER_DATA_DIR`) is another
+    // Bever and is left to run beside it. This plugin has to be the first.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let builder = if erase::is_other_library() {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_single_instance::init(
+            |app, _arguments, _directory| restore_main_window(app),
+        ))
+    };
+    let builder = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init());
@@ -314,6 +329,9 @@ pub fn run() {
             commands::toggle_shortcut,
             commands::organize_notes,
             commands::update_note_timestamps,
+            commands::keep_note_version,
+            commands::note_versions,
+            commands::restore_note_version,
             commands::get_settings,
             commands::set_setting,
             commands::app_info,

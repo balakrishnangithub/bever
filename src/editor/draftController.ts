@@ -34,6 +34,8 @@ const draftOf = (note: Note): Draft => ({
  *   from, which is how a version that arrived from another device in the
  *   meantime is recognised and kept instead of being overwritten.
  * - `flush()` saves at once; it is called before the note is left.
+ * - Before the first save, the application is given the chance to keep the
+ *   note as it was (`beforeFirstSave`).
  *
  * It lives outside React so that these rules do not depend on render timing.
  */
@@ -46,11 +48,19 @@ export class DraftController {
   private edits = 0;
   private saving: Promise<void> | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
+  /** Whether what precedes the first save has been done. */
+  private begun = false;
 
+  /**
+   * `beforeFirstSave` runs once, before the first save: the application
+   * uses it to keep the note as it was. If it fails the save goes ahead
+   * all the same, and the next save tries it again.
+   */
   constructor(
     note: Note,
     private readonly persist: Persist,
     private readonly delayMs = 650,
+    private readonly beforeFirstSave?: () => Promise<unknown>,
   ) {
     this.noteId = note.id;
     this.baseRevision = note.revision;
@@ -105,6 +115,25 @@ export class DraftController {
     this.baseRevision = note.revision;
   }
 
+  /**
+   * The stored note was put back to another form by this editor, which
+   * shows that form from now on. Call `flush()` first: what is unsaved
+   * here is given up.
+   */
+  replace(note: Note): void {
+    clearTimeout(this.timer);
+    this.baseRevision = note.revision;
+    this.edits += 1;
+    // What follows is a new beginning, with its own first save.
+    this.begun = false;
+    this.set({
+      draft: draftOf(note),
+      dirty: false,
+      saveState: 'saved',
+      contentVersion: this.snapshot.contentVersion + 1,
+    });
+  }
+
   /** Saves pending edits now. Resolves once nothing typed so far is unsaved. */
   async flush(): Promise<void> {
     clearTimeout(this.timer);
@@ -114,18 +143,31 @@ export class DraftController {
     const edits = this.edits;
     const input: SaveNote = { id: this.noteId, ...this.snapshot.draft, baseRevision: this.baseRevision };
     this.set({ saveState: 'saving' });
-    const save = this.persist(input, (stored) => {
-      this.baseRevision = stored.revision;
-    }).then(
-      () => {
-        // Edits made during the save keep the draft dirty for the next one.
-        if (this.edits === edits) this.set({ dirty: false, saveState: 'saved' });
-      },
-      (error: unknown) => {
-        this.set({ saveState: 'error' });
-        throw error;
-      },
-    );
+    const ready =
+      this.begun || !this.beforeFirstSave
+        ? Promise.resolve()
+        : this.beforeFirstSave().then(
+            () => {
+              this.begun = true;
+            },
+            () => undefined,
+          );
+    const save = ready
+      .then(() =>
+        this.persist(input, (stored) => {
+          this.baseRevision = stored.revision;
+        }),
+      )
+      .then(
+        () => {
+          // Edits made during the save keep the draft dirty for the next one.
+          if (this.edits === edits) this.set({ dirty: false, saveState: 'saved' });
+        },
+        (error: unknown) => {
+          this.set({ saveState: 'error' });
+          throw error;
+        },
+      );
     const tracked = save.finally(() => {
       if (this.saving === tracked) this.saving = null;
     });

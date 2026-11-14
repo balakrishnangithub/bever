@@ -6,6 +6,7 @@ import type {
   NoteFilter,
   NoteOrganizationAction,
   NotePage,
+  NoteVersion,
   NoteSummary,
   Overview,
   PCloudStatus,
@@ -766,6 +767,30 @@ function containsKind(note: Note, kind: string) {
   }
 }
 
+/** The forms kept of each note, the oldest first, as the core keeps them. */
+const versions = new Map<string, { id: number; keptAt: number; note: Note }[]>();
+let versionCount = 0;
+
+function keepVersion(note: Note): number | null {
+  if (!note.title.trim() && !note.plainText.trim() && !note.resources.length) return null;
+  const kept = versions.get(note.id) ?? [];
+  const newest = kept.at(-1);
+  if (
+    newest &&
+    newest.note.title === note.title &&
+    newest.note.contentHtml === note.contentHtml &&
+    JSON.stringify(newest.note.tags) === JSON.stringify(note.tags) &&
+    JSON.stringify(newest.note.attributes) === JSON.stringify(note.attributes)
+  )
+    return newest.id;
+  versionCount += 1;
+  versions.set(
+    note.id,
+    [...kept, { id: versionCount, keptAt: Date.now(), note: structuredClone(note) }].slice(-5),
+  );
+  return versionCount;
+}
+
 function requireNote(id: string): Note {
   const note = notes.get(id);
   if (!note) throw new Error('Note not found');
@@ -1051,6 +1076,38 @@ export const browserApi: BeverApi = {
     notes.set(id, updated);
     return structuredClone(updated);
   }),
+  keepNoteVersion: demo((id: string) => keepVersion(requireNote(id))),
+  noteVersions: demo((id: string): NoteVersion[] =>
+    (versions.get(id) ?? [])
+      .map(({ id: version, keptAt, note }) => ({
+        id: version,
+        keptAt,
+        updatedAt: note.updatedAt,
+        title: note.title,
+        preview: note.plainText.slice(0, 160),
+      }))
+      .reverse(),
+  ),
+  restoreNoteVersion: demo((id: string, version: number) => {
+    const now = requireNote(id);
+    const kept = (versions.get(id) ?? []).find((item) => item.id === version);
+    if (!kept) throw new Error('that version of the note is not kept');
+    keepVersion(now);
+    kept.note.tags.forEach((tag) => ensureTag(tag));
+    const restored: Note = {
+      ...now,
+      title: kept.note.title,
+      contentHtml: kept.note.contentHtml,
+      plainText: kept.note.plainText,
+      attributes: kept.note.attributes,
+      tags: kept.note.tags,
+      updatedAt: kept.note.updatedAt,
+      revision: now.revision + 1,
+    };
+    notes.set(id, restored);
+    relabelShortcut('note', id, restored.title || 'Untitled');
+    return structuredClone(restored);
+  }),
   getSettings: demo(() => ({ ...settings })),
   setSetting: demo((key, enabled) => {
     if (key === 'load_remote_images') settings.loadRemoteImages = enabled;
@@ -1114,6 +1171,7 @@ export const browserApi: BeverApi = {
       imagesQueued: 0,
       linksResolved: 12,
       tagsNested: 4,
+      shortcutsAdded: 3,
       cancelled: false,
       warnings: withoutMissing
         ? [

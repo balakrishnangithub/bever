@@ -156,6 +156,21 @@ pub struct SaveNote {
     pub base_revision: Option<i64>,
 }
 
+/// A note as it was before it was changed in the editor, kept on this
+/// device so that the change can be taken back.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteVersion {
+    pub id: i64,
+    /// When this form was put aside.
+    pub kept_at: i64,
+    /// The date the note itself had then.
+    pub updated_at: i64,
+    pub title: String,
+    /// How its text begins, to tell it from the others.
+    pub preview: String,
+}
+
 /// Result of saving a note from the editor.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]

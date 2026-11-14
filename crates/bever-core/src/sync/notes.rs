@@ -27,7 +27,9 @@ use crate::{
     db::Library,
     error::{BeverError, Result},
     models::{Note, Notebook, Stack, SyncReport},
-    repository::{default_notebook, insert_note, note_with, reindex_note, sorted_json},
+    repository::{
+        default_notebook, insert_note, note_with, reindex_note, sorted_json, unindex_note,
+    },
     resources::mark_ocr_pending,
 };
 
@@ -583,11 +585,7 @@ impl<'a> Session<'a> {
     /// to it.
     fn record(&mut self, id: &str, revision: i64, mark: &str, version: &str) -> Result<()> {
         let version = if version.is_empty() { UNKNOWN } else { version };
-        let connection = self
-            .library
-            .connection
-            .lock()
-            .expect("database mutex poisoned");
+        let connection = self.library.connection.lock();
         connection.execute(
             "INSERT INTO sync_items(kind, id, remote_revision, synced_hash, synced_at, remote_version) VALUES ('note', ?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(kind, id) DO UPDATE SET remote_revision = excluded.remote_revision, synced_hash = excluded.synced_hash, synced_at = excluded.synced_at, remote_version = excluded.remote_version",
@@ -610,11 +608,7 @@ impl<'a> Session<'a> {
             return Ok(());
         };
         let version = if version.is_empty() { UNKNOWN } else { version };
-        let connection = self
-            .library
-            .connection
-            .lock()
-            .expect("database mutex poisoned");
+        let connection = self.library.connection.lock();
         connection.execute(
             "UPDATE sync_items SET remote_version = ?2 WHERE kind = 'note' AND id = ?1",
             params![id, version],
@@ -664,7 +658,7 @@ struct Applied {
 /// as a separate "conflict copy" note first. The decision is made inside the
 /// transaction, so an edit saved while attachments were downloading is seen.
 fn apply_remote_note(library: &Library, remote: &Note, placement: &Placement) -> Result<Applied> {
-    let mut connection = library.connection.lock().expect("database mutex poisoned");
+    let mut connection = library.connection.lock();
     let transaction = connection.transaction()?;
     let local = match note_with(&transaction, &remote.id) {
         Ok(note) => Some(note),
@@ -747,7 +741,7 @@ fn apply_remote_note(library: &Library, remote: &Note, placement: &Placement) ->
             }
         }
     }
-    transaction.execute("DELETE FROM notes_fts WHERE note_id = ?1", [&note.id])?;
+    unindex_note(&transaction, &note.id)?;
     transaction.execute("DELETE FROM notes WHERE id = ?1", [&note.id])?;
     insert_note(&transaction, &note)?;
     for (import_key, imported_at) in imports {
@@ -785,7 +779,7 @@ fn apply_remote_note(library: &Library, remote: &Note, placement: &Placement) ->
 /// when it was edited here since the last run.
 fn apply_remote_deletion(library: &Library, id: &str) -> Result<bool> {
     let edited: Option<bool> = {
-        let connection = library.connection.lock().expect("database mutex poisoned");
+        let connection = library.connection.lock();
         connection
             .query_row("SELECT dirty != 0 FROM notes WHERE id = ?1", [id], |row| {
                 row.get(0)
@@ -806,7 +800,7 @@ fn apply_remote_deletion(library: &Library, id: &str) -> Result<bool> {
 /// marked by [`mark_needs_push`]. Decided from flags alone, so a run with
 /// nothing to do never loads a note.
 fn pending_note_ids(library: &Library) -> Result<Vec<String>> {
-    let connection = library.connection.lock().expect("database mutex poisoned");
+    let connection = library.connection.lock();
     let ids = connection
         .prepare(
             "SELECT n.id FROM notes n
@@ -827,7 +821,7 @@ fn mark_note_synced(
     loaded_revision: i64,
     uploaded_revision: i64,
 ) -> Result<bool> {
-    let connection = library.connection.lock().expect("database mutex poisoned");
+    let connection = library.connection.lock();
     let unchanged = connection.execute(
         "UPDATE notes SET revision = ?3, dirty = 0 WHERE id = ?1 AND revision = ?2",
         params![id, loaded_revision, uploaded_revision],
@@ -836,7 +830,7 @@ fn mark_note_synced(
 }
 
 fn local_note_tombstones(library: &Library) -> Result<Vec<(String, i64)>> {
-    let connection = library.connection.lock().expect("database mutex poisoned");
+    let connection = library.connection.lock();
     let rows = connection
         .prepare("SELECT id, deleted_at FROM sync_tombstones WHERE kind = 'note' ORDER BY id")?
         .query_map([], |row| {
@@ -847,7 +841,7 @@ fn local_note_tombstones(library: &Library) -> Result<Vec<(String, i64)>> {
 }
 
 fn clear_note_tombstone(library: &Library, id: &str) -> Result<()> {
-    let connection = library.connection.lock().expect("database mutex poisoned");
+    let connection = library.connection.lock();
     connection.execute(
         "DELETE FROM sync_tombstones WHERE kind = 'note' AND id = ?1",
         [id],
@@ -856,7 +850,7 @@ fn clear_note_tombstone(library: &Library, id: &str) -> Result<()> {
 }
 
 fn sync_states(library: &Library) -> Result<HashMap<String, SyncState>> {
-    let connection = library.connection.lock().expect("database mutex poisoned");
+    let connection = library.connection.lock();
     let rows = connection
         .prepare(
             "SELECT id, remote_revision, synced_hash, remote_version FROM sync_items WHERE kind = 'note'",

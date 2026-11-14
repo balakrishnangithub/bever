@@ -538,6 +538,7 @@ function OutcomeRow({ outcome }: { outcome: ImportOutcome }) {
       : null,
     report.linksResolved > 0 ? `${plural(report.linksResolved, 'link')} between notes connected` : null,
     report.tagsNested ? `${plural(report.tagsNested, 'tag')} nested as in Evernote` : null,
+    report.shortcutsAdded ? `${plural(report.shortcutsAdded, 'shortcut')} added as in Evernote` : null,
     report.imagesQueued > 0 ? `${plural(report.imagesQueued, 'image')} queued for text recognition` : null,
     report.cancelled
       ? outcome.notebooks === undefined

@@ -1,6 +1,6 @@
 //! Offline search: Evernote-style query operators compiled to parameterized
 //! SQL over the notes table and its FTS5 index.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{Datelike, Duration, Local, Months, NaiveDate, NaiveDateTime, TimeZone};
 use rusqlite::{params_from_iter, types::Value as SqlValue, Connection};
@@ -65,6 +65,8 @@ struct Ranking {
     whole: String,
     /// The words standing together in their order, when there are several.
     phrase: Option<String>,
+    /// The words one by one, in the order typed.
+    words: Vec<SearchWord>,
 }
 
 impl Compiled {
@@ -117,7 +119,7 @@ const RESPELLINGS: usize = 3;
 /// are looked for among the words that begin with the same letter: that is
 /// where slips of the hand rarely fall, and it keeps the looking short.
 fn respelled(library: &Library, terms: &[Term]) -> Result<Option<Vec<Term>>> {
-    let connection = library.connection.lock().expect("database mutex poisoned");
+    let connection = library.connection.lock();
     let mut respelt = terms.to_vec();
     let mut changed = false;
     for term in &mut respelt {
@@ -244,7 +246,7 @@ fn search_terms(library: &Library, filter: &NoteFilter, terms: &[Term]) -> Resul
     let limit = filter.limit.clamp(1, 500) as usize;
     let offset = filter.offset as usize;
 
-    let connection = library.connection.lock().expect("database mutex poisoned");
+    let connection = library.connection.lock();
     // Which notes are on the page is found first, from what ordering needs
     // and nothing else. What a row of the list shows (its snippet, tags,
     // and picture) costs far more to work out, and is then worked out for
@@ -374,19 +376,25 @@ fn search_terms(library: &Library, filter: &NoteFilter, terms: &[Term]) -> Resul
 /// The notes a search found, best answer first, as rows of the notes table.
 ///
 /// A person who types a note's name wants that note first, however often
-/// the words occur elsewhere. So what was found is put in classes before
-/// any counting of occurrences:
+/// the words occur elsewhere. So what was found is ordered by where the
+/// words are, before any counting of occurrences:
 ///
-/// 0. the title is what was typed;
-/// 1. the title begins with it;
-/// 2. the title has every word;
-/// 3. the title has a word beginning with every word typed;
-/// 4. the words stand together, in their order, somewhere in the note;
-/// 5. every word is somewhere in the note, whole;
-/// 6. the rest, which have words that only begin so.
+/// 1. in the title;
+/// 2. in the name of the notebook;
+/// 3. in the tags;
+/// 4. anywhere else: the text, and what the attachments are named and what
+///    was recognised in them.
 ///
-/// Within a class the index's own measure decides, in which the title
-/// weighs most and tags next, and then the note changed last.
+/// A field has the words when it has every one of them. Within a field
+/// the notes come in this order: the field is what was typed, or begins
+/// with it; then those that have every word whole before those in which a
+/// word only begins so; then the words in their order with nothing
+/// between them, with one word between, with two, and so on; then the
+/// words in another order. "my apple" finds "my apple" before "my
+/// friend's apple", and that before "apple of my eye".
+///
+/// After that the index's own measure decides, in which the title weighs
+/// most, and then the note changed last.
 fn by_relevance(
     connection: &Connection,
     from: &str,
@@ -413,8 +421,11 @@ fn by_relevance(
             None => columns.push("0"),
         }
     }
+    // The title, the notebook and the tags are read from the index's own
+    // row, where they stand before the note's text.
     let sql = format!(
-        "SELECT n.rowid, n.title, bm25(notes_fts, 0.0, 10.0, 1.0, 3.0, 1.0), n.updated_at, n.id, {}, {}
+        "SELECT n.rowid, notes_fts.rowid, notes_fts.title, notes_fts.notebook, notes_fts.tags,
+                bm25(notes_fts, 0.0, 10.0, 5.0, 3.0, 1.0, 1.0), n.updated_at, n.id, {}, {}
          FROM {from} WHERE {where_sql}",
         columns[0], columns[1]
     );
@@ -424,39 +435,73 @@ fn by_relevance(
 
     struct Found {
         row: i64,
-        class: u8,
+        /// The note's row in the index.
+        indexed: i64,
+        standing: Standing,
         measure: f64,
         updated: i64,
         id: String,
     }
-    let text = ranking.map(|ranking| ranking.text.to_lowercase());
+    let typed = ranking.map(|ranking| ranking.text.to_lowercase());
+    let searched = ranking.map_or(&[][..], |ranking| &ranking.words[..]);
     let mut found = connection
         .prepare(&sql)?
         .query_map(params_from_iter(parameters.iter()), |row| {
-            let title: String = row.get(1)?;
-            let (together, whole): (bool, bool) = (row.get(5)?, row.get(6)?);
-            let class = match &text {
-                Some(text) => title_class(&title, text, &compiled.words).unwrap_or(if together {
-                    4
-                } else if whole {
-                    5
-                } else {
-                    6
-                }),
-                None => 6,
+            let (together, whole): (bool, bool) = (row.get(8)?, row.get(9)?);
+            let elsewhere = Standing {
+                field: 3,
+                lead: 2,
+                partly: !whole,
+                order: u8::from(!together),
+                between: 0,
+            };
+            let standing = match &typed {
+                Some(typed) if !searched.is_empty() => {
+                    let title = row.get_ref(2)?.as_str()?;
+                    let notebook = row.get_ref(3)?.as_str()?;
+                    let tags = row.get_ref(4)?.as_str()?;
+                    in_field(0, title, typed, searched)
+                        .or_else(|| in_field(1, notebook, typed, searched))
+                        .or_else(|| in_tags(tags, typed, searched))
+                        .unwrap_or(elsewhere)
+                }
+                _ => elsewhere,
             };
             Ok(Found {
                 row: row.get(0)?,
-                class,
-                measure: row.get(2)?,
-                updated: row.get(3)?,
-                id: row.get(4)?,
+                indexed: row.get(1)?,
+                standing,
+                measure: row.get(5)?,
+                updated: row.get(6)?,
+                id: row.get(7)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    // Of the notes that have the words only in their text, and not side by
+    // side, those that have them in their order are told by how many words
+    // are between. That takes the places of the words from the index.
+    if searched.len() > 1 {
+        let apart = found
+            .iter()
+            .filter(|found| found.standing.field == 3 && found.standing.order == 1)
+            .map(|found| found.indexed)
+            .collect::<HashSet<_>>();
+        if apart.len() > 1 {
+            let between = words_between(connection, searched, &apart)?;
+            for found in &mut found {
+                if found.standing.field == 3 && found.standing.order == 1 {
+                    if let Some(between) = between.get(&found.indexed) {
+                        found.standing.order = 0;
+                        found.standing.between = *between;
+                    }
+                }
+            }
+        }
+    }
     found.sort_by(|a, b| {
-        a.class
-            .cmp(&b.class)
+        a.standing
+            .cmp(&b.standing)
             .then(a.measure.total_cmp(&b.measure))
             .then(b.updated.cmp(&a.updated))
             .then_with(|| a.id.cmp(&b.id))
@@ -497,39 +542,217 @@ fn answers(word: &str, searched: &SearchWord) -> bool {
     }
 }
 
-/// The class, 0 to 3, of a note whose title answers the search by itself.
-fn title_class(title: &str, text: &str, searched: &[SearchWord]) -> Option<u8> {
-    let title = title.trim().to_lowercase();
-    if title == text {
-        return Some(0);
+/// How well a note answers a search by where its words stand. The smaller
+/// in the order of what follows, the better.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct Standing {
+    /// 0 the title, 1 the notebook's name, 2 the tags, 3 anywhere else.
+    field: u8,
+    /// 0 the field is what was typed; 1 it begins with it; 2 neither.
+    lead: u8,
+    /// A word typed is only the beginning of a word that is there.
+    partly: bool,
+    /// 0 the words follow each other in the order typed; 1 they do not;
+    /// 2 they are spread over several tags.
+    order: u8,
+    /// Other words between the words typed, where they are in their order.
+    between: u32,
+}
+
+/// How the words searched for stand among `words`: `None` when one is
+/// missing; otherwise the fewest other words between them where they follow
+/// each other in the order typed (`None` when they nowhere do), and whether
+/// every one of them is there as a whole word.
+fn among(words: &[&str], searched: &[SearchWord]) -> Option<(Option<u32>, bool)> {
+    let mut whole = true;
+    for searched in searched {
+        if !words.iter().any(|word| answers(word, searched)) {
+            return None;
+        }
+        whole &= words.iter().any(|word| *word == searched.0);
     }
-    if title.starts_with(text) {
-        return Some(1);
+    let (first, rest) = searched.split_first()?;
+    let mut least: Option<u32> = None;
+    for start in 0..words.len() {
+        if !answers(words[start], first) {
+            continue;
+        }
+        // The nearest word that answers each next one: no other choice
+        // ends sooner.
+        let mut at = start;
+        let complete = rest.iter().all(|next| {
+            match (at + 1..words.len()).find(|index| answers(words[*index], next)) {
+                Some(index) => {
+                    at = index;
+                    true
+                }
+                None => false,
+            }
+        });
+        if !complete {
+            // Nor would a later beginning find them.
+            break;
+        }
+        let between = (at - start - rest.len()) as u32;
+        least = Some(least.map_or(between, |least| least.min(between)));
+        if between == 0 {
+            break;
+        }
     }
-    if searched.is_empty() {
+    Some((least, whole))
+}
+
+/// The standing of a note by one of its short fields, when the field has
+/// every word. `typed` is the search as it was typed, in lower case.
+fn in_field(field: u8, text: &str, typed: &str, searched: &[SearchWord]) -> Option<Standing> {
+    let text = text.trim().to_lowercase();
+    let words = words_of(&text)
+        .map(|(start, end)| &text[start..end])
+        .collect::<Vec<_>>();
+    let (between, whole) = among(&words, searched)?;
+    let lead = if text == typed {
+        0
+    } else if text.starts_with(typed) {
+        1
+    } else {
+        2
+    };
+    Some(Standing {
+        field,
+        lead,
+        partly: !whole,
+        order: u8::from(between.is_none()),
+        between: between.unwrap_or(0),
+    })
+}
+
+/// The standing of a note by its tags, as the index holds them: the best
+/// of what each tag gives by itself, or, when no one tag has every word
+/// and all of them together have, the last place among the tags.
+fn in_tags(tags: &str, typed: &str, searched: &[SearchWord]) -> Option<Standing> {
+    if tags.is_empty() {
         return None;
     }
-    let words = words_of(&title)
-        .map(|(start, end)| &title[start..end])
-        .collect::<Vec<_>>();
-    let every = |whole: bool| {
-        searched.iter().all(|searched| {
-            words.iter().any(|word| {
-                if whole {
-                    *word == searched.0
-                } else {
-                    answers(word, searched)
-                }
-            })
-        })
-    };
-    if every(true) {
-        Some(2)
-    } else if every(false) {
-        Some(3)
-    } else {
-        None
+    let divider = crate::repository::TAG_DIVIDER;
+    if let Some(best) = tags
+        .split(divider)
+        .filter_map(|tag| in_field(2, tag, typed, searched))
+        .min()
+    {
+        return Some(best);
     }
+    let all = tags.to_lowercase();
+    let words = words_of(&all)
+        .map(|(start, end)| &all[start..end])
+        .collect::<Vec<_>>();
+    let (_, whole) = among(&words, searched)?;
+    Some(Standing {
+        field: 2,
+        lead: 2,
+        partly: !whole,
+        order: 2,
+        between: 0,
+    })
+}
+
+/// Most places of words read from the index to order one search. Reading
+/// them is what the order by nearness costs, and words that are everywhere
+/// would cost more than their order is worth: past this, the notes that
+/// have the words apart stay in the order of the index's own measure.
+const PLACES: usize = 60_000;
+
+/// For each of the notes `wanted` (rows of the index) in whose text the
+/// words searched for follow each other in the order typed: the fewest
+/// other words between them. The text is the note's own and, apart from
+/// it, what its attachments are named and what was recognised in them.
+fn words_between(
+    connection: &Connection,
+    searched: &[SearchWord],
+    wanted: &HashSet<i64>,
+) -> Result<HashMap<i64, u32>> {
+    // For each word, where it stands in each note: (note, in the
+    // attachments) to its places.
+    let mut places: Vec<HashMap<(i64, bool), Vec<u32>>> = Vec::new();
+    let mut left = PLACES;
+    for (word, whole) in searched {
+        let mut statement = connection.prepare_cached(if *whole {
+            "SELECT doc, col, offset FROM notes_fts_places WHERE term = ?1 AND ?2 = ?2 LIMIT ?3"
+        } else {
+            "SELECT doc, col, offset FROM notes_fts_places WHERE term >= ?1 AND term < ?2 LIMIT ?3"
+        })?;
+        let after = format!("{word}\u{10FFFF}");
+        let mut rows = statement.query(rusqlite::params![word, after, (left + 1) as i64])?;
+        let mut of_word: HashMap<(i64, bool), Vec<u32>> = HashMap::new();
+        let mut read = 0;
+        while let Some(row) = rows.next()? {
+            read += 1;
+            if read > left {
+                return Ok(HashMap::new());
+            }
+            let note: i64 = row.get(0)?;
+            if !wanted.contains(&note) {
+                continue;
+            }
+            let attached = match row.get_ref(1)?.as_str().unwrap_or_default() {
+                "body" => false,
+                "resources" => true,
+                _ => continue,
+            };
+            of_word
+                .entry((note, attached))
+                .or_default()
+                .push(row.get(2)?);
+        }
+        left -= read;
+        // A word typed in part answers to several words of the index, each
+        // with its places in their own order.
+        if !*whole {
+            for list in of_word.values_mut() {
+                list.sort_unstable();
+            }
+        }
+        places.push(of_word);
+    }
+    let mut between = HashMap::new();
+    for note in wanted {
+        let least = [false, true]
+            .into_iter()
+            .filter_map(|attached| {
+                let lists = places
+                    .iter()
+                    .map(|of_word| of_word.get(&(*note, attached)))
+                    .collect::<Option<Vec<_>>>()?;
+                least_between(&lists)
+            })
+            .min();
+        if let Some(least) = least {
+            between.insert(*note, least);
+        }
+    }
+    Ok(between)
+}
+
+/// The fewest other words between words that follow each other, one from
+/// each list of places in turn; `None` when they nowhere do.
+fn least_between(lists: &[&Vec<u32>]) -> Option<u32> {
+    let (first, rest) = lists.split_first()?;
+    let mut least: Option<u32> = None;
+    for start in first.iter() {
+        let mut at = *start;
+        for list in rest {
+            match list.get(list.partition_point(|place| *place <= at)) {
+                Some(place) => at = *place,
+                // Nor would a later beginning find them.
+                None => return least,
+            }
+        }
+        let between = at - start - rest.len() as u32;
+        least = Some(least.map_or(between, |least| least.min(between)));
+        if between == 0 {
+            break;
+        }
+    }
+    least
 }
 
 /// About this many words of a note are shown under its title.
@@ -730,7 +953,20 @@ fn compile_terms(terms: &[Term]) -> Result<Compiled> {
                 .map(|term| term.understood().trim_end_matches('*'))
                 .collect::<Vec<_>>()
                 .join(" ");
+            let mut words = Vec::new();
+            for term in &plain {
+                let value = term.understood().trim_end_matches('*').to_lowercase();
+                let mut of_term = words_of(&value)
+                    .map(|(start, end)| (value[start..end].to_owned(), true))
+                    .collect::<Vec<_>>();
+                // Of a term's words, the last may be the beginning of a word.
+                if let Some(last) = of_term.last_mut() {
+                    last.1 = term.quoted;
+                }
+                words.extend(of_term);
+            }
             compiled.ranking = Some(Ranking {
+                words,
                 whole: plain
                     .iter()
                     .filter_map(|term| fts_expression(term.understood(), true, None))
@@ -1637,5 +1873,140 @@ mod tests {
         assert_eq!(count("gurdan", "garden", 2), Some(2));
         assert_eq!(count("gar", "garden", 2), None);
         assert_eq!(count("", "ab", 2), Some(2));
+    }
+
+    #[test]
+    fn the_title_comes_before_the_notebook_the_tags_and_the_text() {
+        let (_directory, library) = library();
+        let orchard = library.ensure_notebook("Apple orchard", None).unwrap();
+        // Listed here from the worst answer to the best.
+        let in_text = add_note(&library, "In the text", "<p>An apple a day</p>", &[]);
+        add_note(&library, "By its tag", "<p>Nothing</p>", &["apple"]);
+        let filed = library.create_note(Some(&orchard)).unwrap();
+        library
+            .save_note(&SaveNote {
+                id: filed.id.clone(),
+                notebook_id: orchard.clone(),
+                title: "In the notebook".into(),
+                content_html: "<p>Nothing</p>".into(),
+                attributes: json!({}),
+                tags: vec![],
+                base_revision: None,
+            })
+            .unwrap();
+        add_note(&library, "Apple pie", "<p>Nothing</p>", &[]);
+        for index in 0..5 {
+            add_note(&library, &format!("Other {index}"), "<p>Nothing</p>", &[]);
+        }
+        assert_eq!(
+            titles(&search(&library, "apple")),
+            ["Apple pie", "In the notebook", "By its tag", "In the text"]
+        );
+        // Words in different fields of a note still find it.
+        assert_eq!(
+            titles(&search(&library, "orchard nothing")),
+            ["In the notebook"]
+        );
+
+        // The index follows a notebook that is renamed and a note that is
+        // moved, by whatever means.
+        library.rename_notebook(&orchard, "Pear garden").unwrap();
+        assert_eq!(
+            titles(&search(&library, "apple")),
+            ["Apple pie", "By its tag", "In the text"]
+        );
+        assert_eq!(titles(&search(&library, "pear")), ["In the notebook"]);
+        library.move_notes(&[in_text], &orchard).unwrap();
+        let mut moved = search(&library, "garden");
+        moved.notes.sort_by(|a, b| a.title.cmp(&b.title));
+        assert_eq!(titles(&moved), ["In the notebook", "In the text"]);
+    }
+
+    #[test]
+    fn words_in_the_order_typed_and_near_each_other_come_first() {
+        let (_directory, library) = library();
+        // Listed here from the worst answer to the best: in the text first.
+        add_note(
+            &library,
+            "Text, another order",
+            "<p>apple pie is what my aunt bakes</p>",
+            &[],
+        );
+        add_note(
+            &library,
+            "Text, far",
+            "<p>my neighbour once grew an apple</p>",
+            &[],
+        );
+        add_note(&library, "Text, near", "<p>my green apple</p>", &[]);
+        add_note(&library, "Text, together", "<p>this is my apple</p>", &[]);
+        add_note(
+            &library,
+            "By tags apart",
+            "<p>Nothing</p>",
+            &["my", "apple"],
+        );
+        add_note(&library, "By one tag", "<p>Nothing</p>", &["my apple"]);
+        add_note(&library, "Apple of my eye", "<p>Nothing</p>", &[]);
+        add_note(&library, "My very dear apple", "<p>Nothing</p>", &[]);
+        add_note(&library, "My dear apple", "<p>Nothing</p>", &[]);
+        add_note(&library, "This is my apple tree", "<p>Nothing</p>", &[]);
+        add_note(&library, "My apple tree", "<p>Nothing</p>", &[]);
+        add_note(&library, "My apple", "<p>Nothing</p>", &[]);
+        for index in 0..5 {
+            add_note(&library, &format!("Other {index}"), "<p>Nothing</p>", &[]);
+        }
+        assert_eq!(
+            titles(&search(&library, "my apple")),
+            [
+                "My apple",
+                "My apple tree",
+                "This is my apple tree",
+                "My dear apple",
+                "My very dear apple",
+                "Apple of my eye",
+                "By one tag",
+                "By tags apart",
+                "Text, together",
+                "Text, near",
+                "Text, far",
+                "Text, another order",
+            ]
+        );
+    }
+
+    #[test]
+    fn how_words_stand_among_others_is_told() {
+        let words = |text: &'static str| text.split(' ').collect::<Vec<_>>();
+        let searched = |text: &str| {
+            text.split(' ')
+                .map(|word| (word.to_owned(), false))
+                .collect::<Vec<_>>()
+        };
+        let my_apple = searched("my apple");
+        assert_eq!(among(&words("my apple"), &my_apple), Some((Some(0), true)));
+        assert_eq!(
+            among(&words("oh my dear old apple"), &my_apple),
+            Some((Some(2), true))
+        );
+        // The nearest of several ways counts.
+        assert_eq!(
+            among(&words("my old apple and my apple"), &my_apple),
+            Some((Some(0), true))
+        );
+        assert_eq!(
+            among(&words("apple of my eye"), &my_apple),
+            Some((None, true))
+        );
+        assert_eq!(
+            among(&words("my apples"), &my_apple),
+            Some((Some(0), false))
+        );
+        assert_eq!(among(&words("my pear"), &my_apple), None);
+        // Places as the index gives them.
+        assert_eq!(least_between(&[&vec![4, 9], &vec![2, 12]]), Some(2));
+        assert_eq!(least_between(&[&vec![4, 9], &vec![2, 10]]), Some(0));
+        assert_eq!(least_between(&[&vec![9], &vec![2]]), None);
+        assert_eq!(least_between(&[&vec![1], &vec![3], &vec![2, 6]]), Some(3));
     }
 }

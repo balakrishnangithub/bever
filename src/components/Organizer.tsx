@@ -15,13 +15,14 @@ import { useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 import { byName } from '../lib/nameOrder';
 import { tagChildren, tagPath } from '../lib/tagTree';
 import { useLibraryStore } from '../store/useLibraryStore';
-import { emptyFilter, type Notebook, type Stack, type Tag } from '../types';
+import type { Notebook, NoteFilter, Stack, Tag } from '../types';
 import { ContextMenu, type MenuItem } from './ContextMenu';
 import { useOrganizeMenus } from './organizeMenus';
 
 export type OrganizerKind = 'notebooks' | 'tags';
 
 type Sort = 'name' | 'count';
+const SORT_KEY = 'bever.organizerSort';
 
 interface OpenMenu {
   position: { x: number; y: number };
@@ -39,10 +40,25 @@ const plural = (count: number, noun: string) => `${count.toLocaleString()} ${nou
  */
 export function Organizer({ kind, onClose }: { kind: OrganizerKind; onClose: () => void }) {
   const overview = useLibraryStore((state) => state.overview);
-  const setFilter = useLibraryStore((state) => state.setFilter);
+  const openView = useLibraryStore((state) => state.openView);
   const { notebookMenu, stackMenu, tagMenu, newNotebook, newStack, newTag } = useOrganizeMenus();
   const [query, setQuery] = useState('');
-  const [sort, setSort] = useState<Sort>('name');
+  // The order chosen for each of the two screens is this device's.
+  const [sort, setSortState] = useState<Sort>(() => {
+    try {
+      return localStorage.getItem(`${SORT_KEY}.${kind}`) === 'count' ? 'count' : 'name';
+    } catch {
+      return 'name';
+    }
+  });
+  const setSort = (next: Sort) => {
+    setSortState(next);
+    try {
+      localStorage.setItem(`${SORT_KEY}.${kind}`, next);
+    } catch {
+      // Not remembered, then.
+    }
+  };
   // Stacks begin open and tags closed: a stack holds a few notebooks, a tag
   // may hold hundreds.
   const [closedStacks, setClosedStacks] = useState<Set<string>>(new Set());
@@ -64,10 +80,8 @@ export function Organizer({ kind, onClose }: { kind: OrganizerKind; onClose: () 
       sort === 'count' ? count(b) - count(a) || byName(name(a), name(b)) : byName(name(a), name(b)),
     );
 
-  const open = async (filter: Partial<typeof emptyFilter>) => {
-    await setFilter({ ...emptyFilter, ...filter });
-    onClose();
-  };
+  // Opening one leaves the screen: the store puts it away as it goes.
+  const open = (filter: Partial<NoteFilter>) => openView(filter);
   const toggle = (set: Set<string>, id: string) => {
     const next = new Set(set);
     if (next.has(id)) next.delete(id);

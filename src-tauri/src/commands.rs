@@ -5,7 +5,10 @@
 //! waits for the database.
 use bever_core::{
     error::{BeverError, Result as BeverResult},
-    models::{LibraryCounts, LibrarySnapshot, Note, NoteFilter, NotePage, SaveNote, SavedNote},
+    models::{
+        LibraryCounts, LibrarySnapshot, Note, NoteFilter, NotePage, NoteVersion, SaveNote,
+        SavedNote,
+    },
     Library,
 };
 use serde::Serialize;
@@ -279,6 +282,29 @@ pub(crate) async fn update_note_timestamps(
         state
             .library
             .update_note_timestamps(&id, created_at, updated_at)
+    })
+    .await
+}
+
+/// Keeps the note as it is stored, before the editor changes it.
+#[tauri::command]
+pub(crate) async fn keep_note_version(app: AppHandle, id: String) -> Result<Option<i64>, String> {
+    blocking(&app, move |_, state| state.library.keep_note_version(&id)).await
+}
+
+#[tauri::command]
+pub(crate) async fn note_versions(app: AppHandle, id: String) -> Result<Vec<NoteVersion>, String> {
+    blocking(&app, move |_, state| state.library.note_versions(&id)).await
+}
+
+#[tauri::command]
+pub(crate) async fn restore_note_version(
+    app: AppHandle,
+    id: String,
+    version: i64,
+) -> Result<Note, String> {
+    blocking(&app, move |_, state| {
+        state.library.restore_note_version(&id, version)
     })
     .await
 }
