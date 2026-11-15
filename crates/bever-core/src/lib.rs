@@ -4,6 +4,7 @@ pub mod enex;
 pub mod enml;
 pub mod error;
 pub mod evernote_local;
+pub mod marks;
 pub mod models;
 pub mod natural;
 pub mod ocr;

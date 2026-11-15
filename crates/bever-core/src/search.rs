@@ -8,7 +8,8 @@ use rusqlite::{params_from_iter, types::Value as SqlValue, Connection};
 use crate::{
     db::Library,
     error::{BeverError, Result},
-    models::{NoteFilter, NotePage, NoteSort, NoteSummary, THUMBNAIL_KEY},
+    marks,
+    models::{NoteFilter, NotePage, NoteSort, NoteSummary},
     natural,
 };
 
@@ -269,6 +270,17 @@ fn search_terms(library: &Library, filter: &NoteFilter, terms: &[Term]) -> Resul
             NoteSort::TitleAsc => format!("n.title COLLATE {} ASC", natural::COLLATION),
             NoteSort::TitleDesc => format!("n.title COLLATE {} DESC", natural::COLLATION),
         };
+        // In a notebook, the notes pinned to it come first, the one pinned
+        // last before the others. A search in the notebook is answered in
+        // the order that was asked for.
+        let order =
+            if filter.notebook_id.is_some() && filter.query.trim().is_empty() && !filter.trash_only
+            {
+                let place = marks::pin_place_sql();
+                format!("({place}) IS NULL, ({place}) DESC, {order}")
+            } else {
+                order
+            };
         // The id makes the order total, so pages never repeat or skip a note.
         let sql = format!(
             "SELECT n.rowid FROM {from} WHERE {where_sql} ORDER BY {order}, n.id LIMIT ? OFFSET ?"
@@ -299,31 +311,16 @@ fn search_terms(library: &Library, filter: &NoteFilter, terms: &[Term]) -> Resul
     } else {
         "substr(n.plain_text, 1, 320)"
     };
-    // The picture that stands for a note: the one chosen for it, while it
-    // is still in the note, and otherwise the largest one that is more than
-    // an icon. A picture taken out of a note stays among its attachments, so
-    // the note's content is asked whether it still shows it.
-    let thumbnail = format!(
-        "COALESCE(
-            (SELECT r.sha256 FROM resources r
-              WHERE r.note_id = n.id AND r.mime LIKE 'image/%'
-                AND r.md5 = json_extract(n.attributes_json, '$.\"application-data\".\"{THUMBNAIL_KEY}\"')
-                AND instr(n.content_html, r.md5) > 0
-              LIMIT 1),
-            (SELECT r.sha256 FROM resources r
-              WHERE r.note_id = n.id AND r.mime IN ('image/png', 'image/jpeg', 'image/webp', 'image/gif')
-                AND (r.width IS NULL OR r.height IS NULL OR (r.width >= 48 AND r.height >= 48))
-                AND instr(n.content_html, r.md5) > 0
-              ORDER BY COALESCE(r.width, 0) * COALESCE(r.height, 0) DESC, r.position
-              LIMIT 1))"
-    );
+    let thumbnail = marks::thumbnail_sql();
+    let pinned = marks::pin_place_sql();
     let marks = vec!["?"; page.len()].join(", ");
     let sql = format!(
         "SELECT n.rowid, n.id, n.notebook_id, nb.name, n.title, {text}, n.created_at, n.updated_at, n.deleted_at,
             COALESCE((SELECT group_concat(t.name, char(31)) FROM tags t JOIN note_tags nt ON nt.tag_id = t.id WHERE nt.note_id = n.id), ''),
             EXISTS(SELECT 1 FROM resources r WHERE r.note_id = n.id),
             EXISTS(SELECT 1 FROM shortcuts s WHERE s.target_type = 'note' AND s.target_id = n.id),
-            {thumbnail}
+            {thumbnail},
+            ({pinned}) IS NOT NULL
          FROM notes n JOIN notebooks nb ON nb.id = n.notebook_id
          WHERE n.rowid IN ({marks})"
     );
@@ -359,6 +356,7 @@ fn search_terms(library: &Library, filter: &NoteFilter, terms: &[Term]) -> Resul
                     has_attachments: row.get(10)?,
                     is_shortcut: row.get(11)?,
                     thumbnail: row.get(12)?,
+                    pinned: row.get(13)?,
                 },
             ))
         })?

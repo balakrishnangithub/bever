@@ -89,31 +89,51 @@ export interface NoteSummary {
   isShortcut: boolean;
   /** SHA-256 of the picture that stands for the note in a list, if it has one. */
   thumbnail: string | null;
+  /** Whether the note is pinned to the top of the notebook it is in. */
+  pinned: boolean;
 }
 
 /**
- * The key under a note's `application-data` that names, by its MD5, the
- * picture chosen to stand for the note in a list.
+ * What is said about a note without being part of it is kept under its
+ * `application-data`: which picture stands for it in a list, and that it is
+ * pinned to its notebook. Setting either is not an edit of the note.
  */
 export const THUMBNAIL_KEY = 'bever.thumbnail';
+export const PINNED_KEY = 'bever.pinned';
+const NO_THUMBNAIL = 'none';
+const AUTOMATIC_THUMBNAIL = 'auto';
+
+/** Which picture stands for a note in a list. */
+export type ThumbnailChoice = { kind: 'automatic' } | { kind: 'none' } | { kind: 'picture'; md5: string };
+
+function mark(attributes: Attributes, key: string): string | null {
+  const data = attributes['application-data'];
+  const value = data && typeof data === 'object' && !Array.isArray(data) ? data[key] : null;
+  return typeof value === 'string' && value ? value : null;
+}
+
+/**
+ * The choice made for a note. What was chosen here comes first; then what
+ * an export of Evernote says in the note's `thumbnail`, which is empty
+ * where the thumbnail was removed there.
+ */
+export function thumbnailChoice(attributes: Attributes): ThumbnailChoice {
+  const chosen = mark(attributes, THUMBNAIL_KEY);
+  const exported = attributes.thumbnail;
+  const said = chosen ?? (typeof exported === 'string' ? exported || NO_THUMBNAIL : null);
+  if (said === null || said === AUTOMATIC_THUMBNAIL) return { kind: 'automatic' };
+  return said === NO_THUMBNAIL ? { kind: 'none' } : { kind: 'picture', md5: said };
+}
 
 /** The MD5 of the picture chosen to stand for a note, if one was chosen. */
 export function chosenThumbnail(attributes: Attributes): string | null {
-  const data = attributes['application-data'];
-  const chosen = data && typeof data === 'object' && !Array.isArray(data) ? data[THUMBNAIL_KEY] : null;
-  return typeof chosen === 'string' && chosen ? chosen : null;
+  const choice = thumbnailChoice(attributes);
+  return choice.kind === 'picture' ? choice.md5 : null;
 }
 
-/** `attributes` with `md5` as the picture chosen for the note, or with none chosen. */
-export function withThumbnail(attributes: Attributes, md5: string | null): Attributes {
-  const data = attributes['application-data'];
-  const kept = data && typeof data === 'object' && !Array.isArray(data) ? { ...data } : {};
-  if (md5) kept[THUMBNAIL_KEY] = md5;
-  else delete kept[THUMBNAIL_KEY];
-  const next = { ...attributes };
-  if (Object.keys(kept).length) next['application-data'] = kept;
-  else delete next['application-data'];
-  return next;
+/** Whether a note is pinned to the notebook it is in. */
+export function isPinned(note: Pick<Note, 'attributes' | 'notebookId'>): boolean {
+  return mark(note.attributes, PINNED_KEY)?.startsWith(`${note.notebookId} `) ?? false;
 }
 
 /** One page of a listing and the size of the whole result. */
@@ -252,6 +272,10 @@ export interface ImportReport {
   notesInTrash?: number;
   /** Only from the Evernote application: tags that no note has, added with the whole account. */
   tagsAdded?: number;
+  /** Only from the Evernote application: notes given the thumbnail they have there, or none. */
+  thumbnailsBrought?: number;
+  /** Only from the Evernote application: notes pinned to their notebooks as they are there. */
+  pinsBrought?: number;
   resourcesImported: number;
   bytesImported: number;
   imagesQueued: number;
@@ -352,6 +376,10 @@ export interface EvernoteImportReport {
   notesInTrash: number;
   /** Tags that no note has, added with the whole account. */
   tagsAdded: number;
+  /** Notes given the thumbnail they have in Evernote, or none where it was removed there. */
+  thumbnailsBrought: number;
+  /** Notes pinned to their notebooks as they are in Evernote. */
+  pinsBrought: number;
   resourcesImported: number;
   bytesImported: number;
   imagesQueued: number;

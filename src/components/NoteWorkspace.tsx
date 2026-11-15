@@ -9,6 +9,7 @@ import {
   LockOpen,
   Maximize2,
   Minimize2,
+  Pin,
   Plus,
   RotateCcw,
   Star,
@@ -27,7 +28,15 @@ import { dialogs } from '../lib/dialogs';
 import { editorSession } from '../lib/editorSession';
 import { searchTerms } from '../lib/searchTerms';
 import { message, useLibraryStore } from '../store/useLibraryStore';
-import { withThumbnail, type Attributes, type Note, type NoteVersion, type Resource } from '../types';
+import {
+  isPinned,
+  thumbnailChoice,
+  type Attributes,
+  type Note,
+  type NoteVersion,
+  type Resource,
+  type ThumbnailChoice,
+} from '../types';
 
 interface WorkspaceProps {
   onBack: () => void;
@@ -52,6 +61,7 @@ function NoteEditor({ note, onBack, focused, onToggleFocus }: WorkspaceProps & {
   const refreshNotes = useLibraryStore((state) => state.refreshNotes);
   const refreshOverview = useLibraryStore((state) => state.refreshOverview);
   const toggleShortcut = useLibraryStore((state) => state.toggleShortcut);
+  const pinNotes = useLibraryStore((state) => state.pinNotes);
   const trashNotes = useLibraryStore((state) => state.trashNotes);
   const restoreNotes = useLibraryStore((state) => state.restoreNotes);
   const deleteNotes = useLibraryStore((state) => state.deleteNotes);
@@ -97,6 +107,7 @@ function NoteEditor({ note, onBack, focused, onToggleFocus }: WorkspaceProps & {
   const trashed = note.deletedAt !== null;
   const readOnly = trashed || locked;
   const isShortcut = shortcuts.some((item) => item.targetType === 'note' && item.targetId === note.id);
+  const pinned = isPinned(note);
 
   // The stored note changed: by this editor's save, or by something else.
   useEffect(() => controller.noteChanged(note), [controller, note]);
@@ -149,6 +160,28 @@ function NoteEditor({ note, onBack, focused, onToggleFocus }: WorkspaceProps & {
     },
     [controller, setSelectedNote],
   );
+
+  /**
+   * Chooses the picture that stands for the note in the list of notes. It
+   * is said about the note, not written in it: the note keeps its date.
+   */
+  const chooseThumbnail = async (choice: ThumbnailChoice) => {
+    try {
+      // What is typed is stored first, so that the choice is not written over.
+      await controller.flush();
+      adopt(await api.setNoteThumbnail(note.id, choice));
+      void refreshNotes();
+      showNotice(
+        choice.kind === 'picture'
+          ? 'The list of notes now shows this note by this picture.'
+          : choice.kind === 'none'
+            ? 'The list of notes now shows this note without a picture.'
+            : 'The list of notes shows this note by its largest picture again.',
+      );
+    } catch (error) {
+      useLibraryStore.getState().showError(error);
+    }
+  };
 
   const attachFiles = useCallback(async (): Promise<Resource[]> => {
     try {
@@ -333,6 +366,17 @@ function NoteEditor({ note, onBack, focused, onToggleFocus }: WorkspaceProps & {
           >
             <Star />
           </button>
+          {!trashed && (
+            <button
+              className={`icon-button desktop-pin ${pinned ? 'is-pinned' : ''}`}
+              title={pinned ? 'Unpin from the top of its notebook' : 'Pin to the top of its notebook'}
+              aria-label={pinned ? 'Unpin from notebook' : 'Pin to notebook'}
+              aria-pressed={pinned}
+              onClick={() => void pinNotes([note.id], !pinned)}
+            >
+              <Pin />
+            </button>
+          )}
           <button
             className={`icon-button ${metadataOpen ? 'active' : ''}`}
             title="Note information"
@@ -482,18 +526,14 @@ function NoteEditor({ note, onBack, focused, onToggleFocus }: WorkspaceProps & {
             note={{ ...note, contentHtml: draft.contentHtml }}
             editable={!readOnly}
             contentVersion={contentVersion}
+            storedHtml={note.contentHtml}
             highlight={highlight}
             onChange={(html) => controller.update('contentHtml', html)}
             onAttachFiles={attachFiles}
             onAttachBlob={attachBlob}
-            onThumbnail={(md5) => {
-              controller.update('attributes', withThumbnail(draft.attributes, md5));
-              showNotice(
-                md5
-                  ? 'The list of notes now shows this note by this picture.'
-                  : 'The list of notes shows this note by its largest picture again.',
-              );
-            }}
+            onThumbnail={(md5) =>
+              void chooseThumbnail(md5 ? { kind: 'picture', md5 } : { kind: 'automatic' })
+            }
           />
         </div>
         {metadataOpen && (
@@ -511,6 +551,8 @@ function NoteEditor({ note, onBack, focused, onToggleFocus }: WorkspaceProps & {
               )
             }
             onChange={(attributes) => controller.update('attributes', attributes)}
+            onThumbnail={(choice) => void chooseThumbnail(choice)}
+            onPin={(pin) => void pinNotes([note.id], pin)}
             onApplyTimestamps={applyTimestamps}
             onClose={() => setMetadataOpen(false)}
           />
@@ -588,11 +630,17 @@ function MetadataPanel({
   versions,
   onRestore,
   onChange,
+  onThumbnail,
+  onPin,
   onApplyTimestamps,
   onClose,
 }: {
   note: Note;
   attributes: Attributes;
+  /** Chooses what stands for the note in the list of notes. */
+  onThumbnail: (choice: ThumbnailChoice) => void;
+  /** Pins the note to the top of its notebook, or takes it down. */
+  onPin: (pinned: boolean) => void;
   readOnly: boolean;
   /** The forms kept of the note before it was changed, the newest first. */
   versions: NoteVersion[];
@@ -618,6 +666,12 @@ function MetadataPanel({
           <X />
         </button>
       </header>
+      {note.deletedAt === null && (
+        <label className="metadata-check">
+          <input type="checkbox" checked={isPinned(note)} onChange={(event) => onPin(event.target.checked)} />
+          Pinned to the top of its notebook
+        </label>
+      )}
       <TimestampEditor
         key={`${note.createdAt}-${note.updatedAt}`}
         createdAt={note.createdAt}
@@ -662,6 +716,27 @@ function MetadataPanel({
           />
         </label>
       ))}
+      {note.resources.some((resource) => resource.mime.startsWith('image/')) && (
+        <label>
+          Thumbnail in the list of notes
+          <select
+            aria-label="Thumbnail in the list of notes"
+            value={thumbnailChoice(note.attributes).kind}
+            disabled={note.deletedAt !== null}
+            onChange={(event) => {
+              if (event.target.value === 'none') onThumbnail({ kind: 'none' });
+              else if (event.target.value === 'automatic') onThumbnail({ kind: 'automatic' });
+            }}
+          >
+            <option value="automatic">The largest picture in the note</option>
+            <option value="none">None</option>
+            {/* Chosen from the picture's own menu in the note. */}
+            <option value="picture" disabled={thumbnailChoice(note.attributes).kind !== 'picture'}>
+              A picture chosen in the note
+            </option>
+          </select>
+        </label>
+      )}
       <p className="metadata-facts">
         {note.resources.length === 1 ? '1 attachment' : `${note.resources.length} attachments`}
         {' · '}

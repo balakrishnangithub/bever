@@ -119,6 +119,20 @@ An export gives a note's tags by name and says nothing of which tag is inside wh
 
 Notes are not changed by this, and are not synchronized again for it.
 
+## What is said about a note
+
+Evernote says two things about a note that are not in the note, and an export has only one of them:
+
+- **Which picture stands for the note in a list**, or that none does. `Nodes_Note.selectedThumbnailHash` is the MD5 of the chosen picture, empty where the thumbnail was removed, and nothing where Evernote chooses. An export has it as `<thumbnail>` among the note's attributes, empty for a removed one, and an import from an export has always kept that; the list of notes now goes by it.
+- **That the note is pinned to its notebook.** The pinned notes are not in the notebook's row. They are in the account's preferences: `Nodes_Preferences.clientInfo` is a JSON object whose `PINNED_NOTES_IN_NOTEBOOK` is, as text, a JSON object from a notebook's identifier to the identifiers of its pinned notes, in the order they were pinned in. Evernote shows the one pinned last first, and so does Bever. An export has nothing of this.
+
+An import from Evernote's files gives both to the notes that are in the library, whether they were imported now or before, and says how many. They are marks about a note (`marks.rs`), kept under its `application-data` as `bever.thumbnail` and `bever.pinned`:
+
+- Setting a mark is not an edit. The note keeps the time Evernote gives it, and an import still knows it as the note it brought: a note that was only pinned, or given another thumbnail, here or by an import, has not been changed here.
+- Each mark is offered once. One that is changed or taken away in Bever afterwards is not brought back by importing again; a choice that changes in Evernote is offered anew.
+- A note is pinned to the notebook it is in. Moved to another, it is not pinned there.
+- A library imported with an earlier version gets both by importing again. Nothing is added, and a note that was changed in Bever gets its marks like any other.
+
 ## Shortcuts
 
 An export has no shortcuts either. Evernote's files do (`Nodes_Shortcut`, and `Nodes_SavedSearch` for the searches among them), and an import from them adds the ones Evernote has, after those that are here and in Evernote's order:

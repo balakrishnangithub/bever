@@ -7,7 +7,7 @@ use bever_core::{
     error::{BeverError, Result as BeverResult},
     models::{
         LibraryCounts, LibrarySnapshot, Note, NoteFilter, NotePage, NoteVersion, SaveNote,
-        SavedNote,
+        SavedNote, ThumbnailChoice,
     },
     Library,
 };
@@ -284,6 +284,31 @@ pub(crate) async fn update_note_timestamps(
             .update_note_timestamps(&id, created_at, updated_at)
     })
     .await
+}
+
+/// Chooses the picture that stands for a note in a list: one of its own,
+/// none, or the one found for it. Not an edit: the note keeps its date.
+#[tauri::command]
+pub(crate) async fn set_note_thumbnail(
+    app: AppHandle,
+    id: String,
+    choice: ThumbnailChoice,
+) -> Result<Note, String> {
+    blocking(&app, move |_, state| {
+        state.library.set_thumbnail(&id, &choice)
+    })
+    .await
+}
+
+/// Pins notes to the top of the notebook each is in, or takes them down.
+/// Returns how many changed.
+#[tauri::command]
+pub(crate) async fn set_notes_pinned(
+    app: AppHandle,
+    ids: Vec<String>,
+    pinned: bool,
+) -> Result<u64, String> {
+    blocking(&app, move |_, state| state.library.set_pinned(&ids, pinned)).await
 }
 
 /// Keeps the note as it is stored, before the editor changes it.

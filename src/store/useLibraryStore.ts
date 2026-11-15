@@ -108,6 +108,8 @@ interface LibraryState {
   renameTag: (id: string, name: string) => Promise<boolean>;
   deleteTag: (id: string) => Promise<boolean>;
   toggleShortcut: (targetType: ShortcutTarget, targetId: string, label: string) => Promise<void>;
+  /** Pins notes to the top of the notebook each is in, or takes them down. */
+  pinNotes: (ids: string[], pinned: boolean) => Promise<void>;
   trashNotes: (ids: string[]) => Promise<void>;
   restoreNotes: (ids: string[]) => Promise<void>;
   deleteNotes: (ids: string[]) => Promise<void>;
@@ -561,6 +563,24 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
     toggleShortcut: async (targetType, targetId, label) => {
       if (await changeOverview(() => api.toggleShortcut(targetType, targetId, label))) {
         void get().refreshNotes();
+      }
+    },
+    pinNotes: async (ids, pinned) => {
+      try {
+        // The open note may be among them; what is typed in it is stored
+        // first, so that the pin is not written over.
+        await editorSession.flush().catch(() => undefined);
+        const changed = await api.setNotesPinned(ids, pinned);
+        if (changed === 0) return;
+        await Promise.all([get().refreshNotes(), reloadSelectedNote()]);
+        const where = ids.length === 1 ? 'its notebook' : 'their notebooks';
+        set({
+          notice: pinned
+            ? `${plural(changed, 'note')} pinned to the top of ${where}.`
+            : `${plural(changed, 'note')} no longer pinned.`,
+        });
+      } catch (error) {
+        set({ error: message(error) });
       }
     },
 

@@ -1860,6 +1860,235 @@ try {
   await long.screenshot({ path: 'test-results/bever-long-list.png', fullPage: true });
   await long.close();
 
+  {
+    // A note is stored anew only when it was changed. Placing and moving the
+    // cursor, a letter typed and taken away again, and a space at the end of a
+    // line leave it as it is, to its date. What can be seen is a change.
+    const careful = await browser.newPage({ viewport: { width: 1440, height: 920 } });
+    careful.on('pageerror', (error) => errors.push(error.message));
+    careful.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    await careful.goto('http://127.0.0.1:7100', { waitUntil: 'domcontentloaded' });
+    await careful.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+    await careful.locator('.note-list').getByRole('heading', { name: 'Bring your notes along' }).click();
+    const changedAt = () => careful.locator('.note-identity time').getAttribute('datetime');
+    const savedCount = () => careful.evaluate(() => window.__beverDemoSaves ?? 0);
+    const storedAt = await changedAt();
+    expect(await savedCount()).toBe(0);
+    await careful.locator('.note-prose p').first().click();
+    for (const key of [
+      'ArrowRight',
+      'ArrowRight',
+      'ArrowDown',
+      'End',
+      'Home',
+      'Shift+ArrowRight',
+      'Control+End',
+    ]) {
+      await careful.keyboard.press(key);
+    }
+    await careful.keyboard.type('x');
+    await careful.keyboard.press('Backspace');
+    await careful.keyboard.type('  ');
+    await careful.waitForTimeout(1600);
+    expect(await savedCount()).toBe(0);
+    expect(await changedAt()).toBe(storedAt);
+    await expect(careful.getByText('Saved locally', { exact: true })).toBeVisible();
+    // The same for a title typed again as it was, and a tag added and removed.
+    await careful.getByLabel('Note title').fill('Bring your notes along!');
+    await careful.getByLabel('Note title').fill('Bring your notes along');
+    await careful.waitForTimeout(1200);
+    expect(await savedCount()).toBe(0);
+    // A letter that stays is a change, and is stored.
+    await careful.locator('.note-prose p').first().click();
+    await careful.keyboard.type('!');
+    await expect.poll(savedCount, { timeout: 10000 }).toBe(1);
+    await expect.poll(changedAt).not.toBe(storedAt);
+
+    // A note is pinned to the top of its notebook, which is said about it and
+    // not written in it: its date stays.
+    await careful.locator('.notebook-row', { hasText: 'Reading' }).locator('.tree-row').click();
+    const listed = careful.locator('.note-list .note-card h2');
+    await expect(listed).toHaveText(['Bring your notes along', 'Local attachment preview']);
+    await careful.locator('.note-list').getByRole('heading', { name: 'Local attachment preview' }).click();
+    await expect(careful.getByLabel('Note title')).toHaveValue('Local attachment preview');
+    const pinnedAt = await changedAt();
+    await careful.getByRole('button', { name: 'Pin to notebook' }).click();
+    await expect(careful.getByText('1 note pinned to the top of its notebook.')).toBeVisible();
+    await expect(listed).toHaveText(['Local attachment preview', 'Bring your notes along']);
+    await expect(careful.locator('.note-card').first()).toHaveClass(/pinned/);
+    await expect(careful.locator('.note-card').first().locator('.pinned-mark')).toBeVisible();
+    await expect(careful.getByRole('button', { name: 'Unpin from notebook' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(await changedAt()).toBe(pinnedAt);
+    await careful.screenshot({ path: 'test-results/bever-pinned.png', fullPage: true });
+    // Among all notes it is where its date puts it, and shown as pinned.
+    await careful
+      .locator('.primary-nav')
+      .getByRole('button', { name: /All notes/ })
+      .click();
+    await expect(listed.last()).toHaveText('Local attachment preview');
+    await expect(careful.locator('.note-card.pinned')).toHaveCount(1);
+    // Several are pinned, and taken down, together.
+    await careful.getByLabel('Select Welcome to Bever').check();
+    await careful.getByLabel('Select Bring your notes along').check();
+    const selection = careful.getByRole('toolbar', { name: 'Selected note actions' });
+    await selection.getByRole('button', { name: 'Pin', exact: true }).click();
+    await expect(careful.getByText('2 notes pinned to the top of their notebooks.')).toBeVisible();
+    await expect(careful.locator('.note-card.pinned')).toHaveCount(3);
+    await selection.getByRole('button', { name: 'Unpin', exact: true }).click();
+    await expect(careful.getByText('2 notes no longer pinned.')).toBeVisible();
+    await expect(careful.locator('.note-card.pinned')).toHaveCount(1);
+    await selection.getByRole('button', { name: 'Clear note selection' }).click();
+    // In the note's information too, which is where a phone has it.
+    await careful.getByRole('button', { name: 'Note information' }).click();
+    const pinnedBox = careful.getByRole('checkbox', { name: 'Pinned to the top of its notebook' });
+    await expect(pinnedBox).toBeChecked();
+    await pinnedBox.uncheck();
+    await expect(careful.locator('.note-card.pinned')).toHaveCount(0);
+    await expect(careful.getByRole('button', { name: 'Pin to notebook' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+    await careful.getByRole('button', { name: 'Close note information' }).click();
+
+    // With Ctrl and the wheel the note is made larger, as a page of a PDF is:
+    // its lines stay as they are.
+    const wideLine = careful.locator('.note-prose p').first();
+    const narrow = await wideLine.boundingBox();
+    await careful.mouse.move(narrow.x + 40, narrow.y + 8);
+    await careful.keyboard.down('Control');
+    await careful.mouse.wheel(0, -240);
+    await careful.keyboard.up('Control');
+    const zoomFrame = careful.locator('.note-zoom');
+    await expect(zoomFrame).toHaveClass(/zoomed/);
+    const wheelZoom = Number(
+      await zoomFrame.evaluate((element) => getComputedStyle(element).getPropertyValue('--note-zoom')),
+    );
+    expect(wheelZoom).toBeGreaterThan(1.5);
+    const wide = await wideLine.boundingBox();
+    expect(wide.height / narrow.height).toBeCloseTo(wheelZoom, 1);
+    await expect(careful.locator('.zoom-chip')).toContainText(`${Math.round(wheelZoom * 100)}%`);
+    await careful.screenshot({ path: 'test-results/bever-zoomed.png', fullPage: true });
+    await careful.locator('.zoom-chip').click();
+    await expect(zoomFrame).not.toHaveClass(/zoomed/);
+    expect((await wideLine.boundingBox()).height).toBeCloseTo(narrow.height, 0);
+    // Making a note larger to look at is no change of it.
+    expect(await savedCount()).toBe(1);
+    await careful.close();
+
+    // A note's thumbnail is taken away, and brought back.
+    const plain = await browser.newPage({ viewport: { width: 1440, height: 920 } });
+    plain.on('pageerror', (error) => errors.push(error.message));
+    plain.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    await plain.goto('http://127.0.0.1:7100/?demoImages', { waitUntil: 'domcontentloaded' });
+    await plain.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+    const withPictures = plain.locator('.note-card', { hasText: 'Domain and range, with pictures' });
+    await expect(withPictures.locator('img.note-thumbnail')).toHaveCount(1);
+    await withPictures.getByRole('button', { name: /^Open note/ }).click();
+    const shownAt = await plain.locator('.note-identity time').getAttribute('datetime');
+    await plain.getByRole('button', { name: 'Note information' }).click();
+    const thumbnailSelect = plain.getByLabel('Thumbnail in the list of notes');
+    await expect(thumbnailSelect).toHaveValue('automatic');
+    await thumbnailSelect.selectOption('none');
+    await expect(plain.getByText('The list of notes now shows this note without a picture.')).toBeVisible();
+    await expect(withPictures.locator('img.note-thumbnail')).toHaveCount(0);
+    await expect(thumbnailSelect).toHaveValue('none');
+    // Said about the note, not written in it.
+    expect(await plain.locator('.note-identity time').getAttribute('datetime')).toBe(shownAt);
+    await plain.screenshot({ path: 'test-results/bever-thumbnail-none.png', fullPage: true });
+    await thumbnailSelect.selectOption('automatic');
+    await expect(withPictures.locator('img.note-thumbnail')).toHaveCount(1);
+    await plain.close();
+
+    // On a phone, two fingers spread on a note make it larger. Nothing is
+    // wrapped anew; what does not fit is reached by moving the note.
+    const phoneWithTouch = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      hasTouch: true,
+      isMobile: true,
+    });
+    const zooming = await phoneWithTouch.newPage();
+    zooming.on('pageerror', (error) => errors.push(error.message));
+    zooming.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    await zooming.goto('http://127.0.0.1:7100', { waitUntil: 'domcontentloaded' });
+    await zooming.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+    await zooming.locator('.note-list').getByRole('heading', { name: 'Welcome to Bever' }).tap();
+    const paragraph = zooming.locator('.note-prose p').first();
+    await expect(paragraph).toBeVisible();
+    await zooming.locator('.editor-panel').evaluate(async (element) => {
+      await Promise.all(element.getAnimations().map((animation) => animation.finished));
+    });
+    const small = await paragraph.boundingBox();
+    const titleWidth = (await zooming.getByLabel('Note title').boundingBox()).width;
+    const touch = await phoneWithTouch.newCDPSession(zooming);
+    const fingers = (type, points) =>
+      touch.send('Input.dispatchTouchEvent', {
+        type,
+        touchPoints: points.map(([x, y], id) => ({ x: Math.round(x), y: Math.round(y), id })),
+      });
+    const middle = { x: small.x + small.width / 2, y: small.y + small.height / 2 };
+    await fingers('touchStart', [
+      [middle.x - 30, middle.y],
+      [middle.x + 30, middle.y],
+    ]);
+    for (let spread = 40; spread <= 90; spread += 10) {
+      await fingers('touchMove', [
+        [middle.x - spread, middle.y],
+        [middle.x + spread, middle.y],
+      ]);
+      await zooming.waitForTimeout(40);
+    }
+    await fingers('touchEnd', []);
+    const phoneFrame = zooming.locator('.note-zoom');
+    await expect(phoneFrame).toHaveClass(/zoomed/);
+    const pinched = Number(
+      await phoneFrame.evaluate((element) => getComputedStyle(element).getPropertyValue('--note-zoom')),
+    );
+    // The fingers went from 60 apart to 180.
+    expect(pinched).toBeGreaterThan(2.6);
+    expect(pinched).toBeLessThanOrEqual(3.05);
+    const large = await paragraph.boundingBox();
+    // Larger by as much each way: the lines are the lines they were.
+    expect(large.height / small.height).toBeCloseTo(pinched, 1);
+    expect(large.width / small.width).toBeCloseTo(pinched, 1);
+    expect(await phoneFrame.evaluate((element) => element.scrollWidth > element.clientWidth + 20)).toBe(true);
+    // What was between the fingers is still between them, sideways.
+    expect(Math.abs(large.x + (middle.x - small.x) * pinched - middle.x)).toBeLessThan(4);
+    // The note is larger, not the window, and not what stands around the note.
+    expect(await zooming.evaluate(() => window.visualViewport.scale)).toBe(1);
+    expect((await zooming.getByLabel('Note title').boundingBox()).width).toBeCloseTo(titleWidth, 0);
+    await zooming.screenshot({ path: 'test-results/bever-mobile-zoomed.png' });
+    // It is moved sideways with a finger, and brought back to its own size.
+    await phoneFrame.evaluate((element) => {
+      element.scrollLeft = 120;
+    });
+    expect(await phoneFrame.evaluate((element) => element.scrollLeft)).toBe(120);
+    await zooming.locator('.zoom-chip').tap();
+    await expect(phoneFrame).not.toHaveClass(/zoomed/);
+    expect((await paragraph.boundingBox()).width).toBeCloseTo(small.width, 0);
+    // Fingers brought together again make it no smaller than it is.
+    await fingers('touchStart', [
+      [middle.x - 90, middle.y],
+      [middle.x + 90, middle.y],
+    ]);
+    await fingers('touchMove', [
+      [middle.x - 30, middle.y],
+      [middle.x + 30, middle.y],
+    ]);
+    await zooming.waitForTimeout(60);
+    await fingers('touchEnd', []);
+    await expect(phoneFrame).not.toHaveClass(/zoomed/);
+    await phoneWithTouch.close();
+  }
+
   // A synchronization that only pretends (?demoSync): a run can be stopped
   // where it was started, says how it ended, and is in the record of runs.
   const syncing = await browser.newPage({ viewport: { width: 1440, height: 920 } });

@@ -136,6 +136,34 @@ fn main() -> Result<(), Failure> {
         "SELECT parent_Note_id, label FROM Nodes_Task WHERE deleted IS NULL OR deleted = 0",
     )
     .unwrap_or_default();
+    // What Evernote says about a note beside what is in it: the picture
+    // chosen for it (empty where its thumbnail was removed), and the notes
+    // pinned to notebooks, which are among the account's preferences.
+    let their_thumbnails = grouped(
+        &evernote,
+        "SELECT id, lower(selectedThumbnailHash) FROM Nodes_Note WHERE selectedThumbnailHash IS NOT NULL",
+    )
+    .unwrap_or_default();
+    let mut their_pins: HashSet<String> = HashSet::new();
+    if let Ok(mut statement) = evernote.prepare("SELECT clientInfo FROM Nodes_Preferences") {
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            let pinned = row
+                .get::<_, Option<String>>(0)?
+                .and_then(|info| serde_json::from_str::<serde_json::Value>(&info).ok())
+                .and_then(|info| info.get("PINNED_NOTES_IN_NOTEBOOK").cloned())
+                .and_then(|pinned| match pinned {
+                    serde_json::Value::String(text) => serde_json::from_str(&text).ok(),
+                    other => Some(other),
+                });
+            if let Some(serde_json::Value::Object(notebooks)) = pinned {
+                for notes in notebooks.values() {
+                    let notes = notes.as_array().into_iter().flatten();
+                    their_pins.extend(notes.filter_map(|id| id.as_str().map(str::to_owned)));
+                }
+            }
+        }
+    }
     let our_tags = grouped(
         &bever,
         "SELECT n.evernote_guid, lower(t.name) FROM note_tags nt JOIN tags t ON t.id = nt.tag_id JOIN notes n ON n.id = nt.note_id
@@ -157,12 +185,13 @@ fn main() -> Result<(), Failure> {
         attributes: serde_json::Value,
         text: String,
         trashed: bool,
+        notebook_id: String,
     }
     let mut ours: HashMap<String, Vec<Ours>> = HashMap::new();
     let mut without_identifier = 0u64;
     {
         let mut statement = bever.prepare(
-            "SELECT n.evernote_guid, n.title, n.created_at, n.updated_at, nb.name, s.name, n.attributes_json, n.plain_text, n.deleted_at IS NOT NULL
+            "SELECT n.evernote_guid, n.title, n.created_at, n.updated_at, nb.name, s.name, n.attributes_json, n.plain_text, n.deleted_at IS NOT NULL, n.notebook_id
              FROM notes n JOIN notebooks nb ON nb.id = n.notebook_id LEFT JOIN stacks s ON s.id = nb.stack_id",
         )?;
         let mut rows = statement.query([])?;
@@ -180,6 +209,7 @@ fn main() -> Result<(), Failure> {
                 attributes: serde_json::from_str(&row.get::<_, String>(6)?).unwrap_or_default(),
                 text: row.get(7)?,
                 trashed: row.get(8)?,
+                notebook_id: row.get(9)?,
             });
         }
     }
@@ -187,6 +217,7 @@ fn main() -> Result<(), Failure> {
     let mut findings = Findings::default();
     let (mut notes, mut same_text, mut no_text, mut tasks, mut characters) =
         (0u64, 0u64, 0u64, 0u64, 0u64);
+    let (mut thumbnails, mut pins) = (0u64, 0u64);
     let mut theirs: HashSet<String> = HashSet::new();
     let mut statement = evernote.prepare(&format!(
         "SELECT n.id, trim(coalesce(n.label, '')), n.created, n.updated, trim(coalesce(nb.label, '')), nb.personal_Stack_id,
@@ -258,6 +289,35 @@ fn main() -> Result<(), Failure> {
                 findings.differs("an attribute differs", &id);
             }
         }
+        // The picture that stands for the note, and its pin.
+        let mark = |key: &str| {
+            note.attributes
+                .get("application-data")
+                .and_then(|data| data.get(key))
+                .and_then(|value| value.as_str())
+        };
+        let chosen_there = their_thumbnails.get(&id).and_then(|chosen| chosen.first());
+        let same_choice = match (chosen_there, mark("bever.thumbnail")) {
+            (None, None | Some("auto")) => true,
+            (Some(there), Some("none")) => there.is_empty(),
+            (Some(there), Some(here)) => !there.is_empty() && there.eq_ignore_ascii_case(here),
+            _ => false,
+        };
+        if chosen_there.is_some() {
+            thumbnails += 1;
+        }
+        if !same_choice {
+            findings.differs("the thumbnail chosen differs", &id);
+        }
+        let pinned_here = mark("bever.pinned")
+            .and_then(|pin| pin.strip_prefix(note.notebook_id.as_str()))
+            .is_some_and(|rest| rest.starts_with(' '));
+        if their_pins.contains(&id) {
+            pins += 1;
+        }
+        if pinned_here != their_pins.contains(&id) {
+            findings.differs("pinned in one and not in the other", &id);
+        }
         let mut tags_there = their_tags.get(&id).cloned().unwrap_or_default();
         tags_there.retain(|tag| !tag.is_empty());
         tags_there.sort();
@@ -315,6 +375,7 @@ fn main() -> Result<(), Failure> {
 
     println!("Evernote has {notes} notes outside its trash; the library has {} from Evernote and {without_identifier} others.", ours.values().map(Vec::len).sum::<usize>());
     println!("Text the same as Evernote indexes: {same_text} notes, {characters} characters; without text in both: {no_text}; tasks looked for: {tasks}.");
+    println!("Notes with a thumbnail chosen or removed in Evernote: {thumbnails}; notes pinned to their notebooks there: {pins}.");
     let count = |connection: &Connection, sql: &str| -> Result<i64, Failure> {
         Ok(connection.query_row(sql, [], |row| row.get(0))?)
     };

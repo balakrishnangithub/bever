@@ -4879,3 +4879,90 @@ span.stack-toggle {
 .sync-runs li > span {
   overflow-wrap: anywhere;
 }
+
+/* A note made larger to look at. Its lines stay as they are: it becomes
+   wider than its place, and is moved to see what does not fit. */
+.note-zoom {
+  /* Two fingers on a note change its size; the window is not zoomed. */
+  touch-action: pan-x pan-y;
+}
+.note-zoom.zoomed {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+.note-zoom.zoomed > .editor-content {
+  width: calc(var(--note-zoom, 1) * 100%);
+  zoom: var(--note-zoom, 1);
+}
+.zoom-chip {
+  position: sticky;
+  bottom: 14px;
+  z-index: 9;
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-end;
+  gap: 4px;
+  margin-top: -34px;
+  padding: 5px 8px 5px 11px;
+  border: 1px solid var(--soft-line);
+  border-radius: 999px;
+  background: var(--panel-strong);
+  box-shadow: var(--shadow);
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.zoom-chip svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* A note pinned to the top of its notebook. */
+.icon-button.is-pinned svg {
+  fill: currentColor;
+  color: var(--accent-strong);
+}
+.pinned-mark {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--accent-strong);
+}
+.pinned-mark svg {
+  width: 13px;
+  height: 13px;
+  fill: currentColor;
+}
+.note-card.pinned {
+  box-shadow: inset 2px 0 0 var(--accent-strong);
+}
+
+.metadata-panel > label.metadata-check {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 13px;
+}
+.metadata-panel > label.metadata-check input {
+  width: auto;
+  margin: 0;
+}
+.metadata-panel select {
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-strong);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+}
+/* A phone's header has no room for one more button: there the pin is in
+   the note's information. */
+@media (max-width: 760px) {
+  .workspace-actions > .desktop-pin {
+    display: none;
+  }
+}

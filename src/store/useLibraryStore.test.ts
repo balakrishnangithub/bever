@@ -39,6 +39,7 @@ const summary = (index: number): NoteSummary => ({
   hasAttachments: false,
   isShortcut: false,
   thumbnail: null,
+  pinned: false,
 });
 
 const note = (id: string, overrides: Partial<Note> = {}): Note => ({

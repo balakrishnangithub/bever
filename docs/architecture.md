@@ -29,6 +29,7 @@ The browser adapter in `src/lib/browserApi.ts` exists only to exercise the inter
 - `db.rs`: schema, SQLite pragmas, settings, device identity.
 - `repository.rs`: notes — create, save, list, copy, trash, delete, import, and the search-index entry of each.
 - `organize.rs`: notebooks, stacks, tags, and shortcuts, including the deletion records that synchronization carries.
+- `marks.rs`: what is said about a note without being part of it: the picture that stands for it in a list, and that it is pinned to its notebook. Both are kept under the note's `application-data`, so they travel with it; setting one is not an edit.
 - `resources.rs`: attachments of a note and the text-recognition queue.
 - `search.rs`: parsed query operators, parameterized SQL, and the order of what a search found.
 - `versions.rs`: a note as it was before the editor changed it, kept on the device to be put back.
@@ -82,6 +83,8 @@ SQLite uses WAL mode, `synchronous=NORMAL`, foreign keys, a busy timeout, and ta
 ## Editor
 
 TipTap stores an HTML-like editable document. Custom nodes preserve `en-media`, classic `en-todo`, `en-crypt`, and web clippings, which are single blocks carrying their markup verbatim. Evernote checklists, code blocks, and highlights are normalized into the editor's own nodes on import and written back as ENML on export. This is preferable to flattening notes into Markdown, which would lose ENML structure and attachment references.
+
+A note is stored anew only when it was changed, and that is decided in three places, each of which would do alone. The editor reports the stored page itself for as long as its document shows nothing that the stored page does not (`face.ts`): what cannot be seen, such as a space at the end of a line or an empty line the editor adds at the end, is no change, and neither is a word that a keyboard takes up and puts back. The draft is unsaved when it differs from what is stored, which is worked out and not remembered (`draftController.ts`): an edit taken back leaves nothing to save. And the library does not store a note that is given to it as it already has it (`save_note`). So no way of touching a note without changing it can move its date, rewrite its page, or send it to other devices.
 
 Saving is serialized by `draftController.ts`: one save at a time, each carrying the revision it is based on, with a flush when the note is left, the window is hidden, or the application closes. Attaching a file stores it and returns a reference; the editor inserts the node at the cursor, so the stored note never replaces what is on screen.
 

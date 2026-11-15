@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.2.0 — 2026-11-16
+
+A note was stored anew, and given a new date, when no more was done to it than placing the cursor in it. A note is now stored only when what can be seen of it has changed. Besides that, a note can be made larger to look at, pinned to the top of its notebook, and shown in lists without a picture; and an import from Evernote brings the pins and the thumbnail choices Evernote has.
+
+### Fixed
+
+- **A note that is only touched is not changed.** The editor used to store a note whenever it said that something had happened to its document, and it says so for reasons that are not the writer's: a keyboard on a screen takes up the word under the cursor and puts it back, sometimes with a space after it; an empty line is added at the end of a note so that there is somewhere to write. The note was then written anew in the editor's own markup, got the present as its date, moved up in the list, and was sent to the other devices. Three things now each prevent that:
+  - The editor compares what can be seen. For as long as its document shows nothing that the stored note does not, the note is the stored note. Spaces at the end of a line and empty lines at the end of the note cannot be seen and are no change; a letter typed and taken away again is none either.
+  - What is unsaved is worked out, not remembered. A title typed again as it was, a tag added and removed, a move to another notebook and back leave nothing to save.
+  - The library does not store a note that is given to it as it already has it.
+- **An imported note stays as Evernote wrote it until it is changed.** Its markup is kept to the letter while it is only read, which is also what makes it comparable with Evernote afterwards.
+- **Choosing a thumbnail does not change the note's date.** It is said about the note, not written in it.
+
+### Added
+
+- **Zoom.** A note is made larger to look at with two fingers spread on it, or with Ctrl and the wheel, which is also what a touchpad sends for the same gesture. It is the zoom of a page of a PDF: the lines stay as they are, nothing is wrapped anew, and what does not fit is reached by moving the note. What was under the fingers stays under them. The title, the toolbar and the rest of the window keep their size. A small label says how large the note is and brings it back to its own size; the next note opens at its own size.
+- **Pin to notebook.** A note is pinned to the top of its notebook from its header, from its information, or, for several notes at once, from the list. The one pinned last stands first. A pinned note carries a pin wherever it is listed. Moved to another notebook it is not pinned there. Pinning is not an edit: the note keeps its date.
+- **No thumbnail.** In a note's information, the picture that stands for it in the list of notes can be taken away, and brought back. A picture's own menu still chooses that picture.
+- **Evernote's pins and thumbnail choices are imported.** An import from Evernote on this computer pins the notes that are pinned to their notebooks there, and gives each note the thumbnail it has there: the one chosen, or none where it was removed. The summary says how many. An export carries the thumbnail choice too, as `<thumbnail>` among a note's attributes, and the list of notes now goes by it; an export has no pins.
+- `audit_evernote_local` compares the thumbnail chosen for each note and the notes pinned with Evernote.
+
+### Compatibility
+
+- **To get the pins and thumbnail choices into a library that was imported before, import again from Evernote on this computer.** Nothing is added. A note that was changed in Bever gets them like any other, and keeps what was written in it.
+- A library of 1.0.0 or later is opened as it is. Nothing changes in how notes are kept or synchronized: a pin and a thumbnail choice are among the note's details, under `application-data`, and travel with the note. A device with an earlier version keeps them, shows a pinned note where its date puts it, and shows a note whose thumbnail was taken away by its largest picture.
+- Each of Evernote's pins and thumbnail choices is offered once. One that is changed or taken away in Bever afterwards is not brought back by importing again.
+- For those building on `bever-core`: `Library::set_thumbnail` (`models::ThumbnailChoice`), `Library::set_pinned` and `Library::offer_marks` (`marks::ForeignMarks`) are new; `NoteSummary` has `pinned`; `LocalImportReport` has `thumbnails_brought` and `pins_brought`; `Library::save_note` returns the stored note unchanged, with its revision, when it is given the note as it is stored; a note's import key no longer includes its marks.
+
+### What was verified
+
+- Automated: 183 tests of the Rust core and 12 of its round trips through ENEX, 25 of the native shell, 180 of the interface, and the browser check. `cargo audit` and `npm audit` find no vulnerability.
+- **A note that is only touched.** In the built Windows application, a note imported from files in Evernote's form was opened, the cursor was placed and moved in it, a letter was typed and taken away, and a space was typed at the end of a line: its stored page was the same to the letter afterwards, with the same date and revision. A letter that stayed was stored. In the browser check the same was done with a count of how often the note was stored, which stayed at nothing, also for a title typed again as it was. Unit tests cover a word written over itself, as a keyboard does it, a space put after it at the end of its line, an empty line added at the end of a note that ends in a rule, and everything that can be seen being taken for a change.
+- **Zoom.** In the browser check, on a screen of a phone's size that takes touches, two fingers moved from 60 to 180 pixels apart made the note three times as large. A paragraph's box grew by that much in both directions, so no line was wrapped anew; the note could be moved sideways; what was between the fingers stayed between them to 4 pixels; the title and the window kept their size. The label brought the note back to its own size, and fingers brought together did not make it smaller than that. Ctrl and the wheel did the same on a desktop.
+- **Pins and thumbnails.** Core tests: a pinned note is first in its notebook and where its date puts it elsewhere, keeps its date, is not pinned in a notebook it is moved to, and reaches a second device pinned; a thumbnail can be a chosen picture, none, or the one found, and an export that says which is believed and writes it back. In the browser check and in the built application a note was pinned from its header, from its information and from a selection, and a thumbnail was taken away and brought back.
+- **The import, against one account.** A copy of a library of 4,834 notes as 1.1.3 had imported it differed from Evernote in 10 pins and 4 thumbnail choices. Imported again with this version: no note added, 2 brought up to what Evernote has now, 10 pinned, 4 given their choice (three removed, one chosen); after that the audit differed from Evernote only in 4 notes whose attachments Evernote itself does not have on the computer. The whole account imported anew: 4,829 notes with 7,805 attachments, 140 tasks, 10 pins and 4 thumbnail choices; the audit, with all 7,751 files read and hashed (6.6 GB), found nothing that differs but the 5 notes Evernote does not have whole, which the import names.
+- The 160 exports of the same account (8.6 GB) were read for what they say: `<thumbnail>` is in 4 notes, empty in 3 of them; nothing in any export says that a note is pinned.
+- The built Windows application passed its general check (`npm run test:native`: 26 checks with an empty library, 30 with an export of 171 notes) and the synchronization check against a stand-in for pCloud (`npm run test:sync`: 13 and 12).
+- The Windows program and the Android package were built from the released source.
+
+### Not verified
+
+- **What set the editor off in the reported case was not found.** The note's kept earlier versions showed what had happened: its page written anew with the same text, twice with a space after a link at the end of a line. The same note, in a copy of that library and in the application, was touched in 27 ways (clicks in every line, the keys, a selection, taps, a word taken up as text being composed) without 1.1.3 changing it. The fix does not depend on the cause: whatever makes the editor change its document without anything to be seen changing is no longer a change of the note.
+- **Zoom was tried with touches made by a program, in the engine of a desktop browser.** It was not tried with fingers on an Android device or on a touch screen under Windows, and how smoothly a very long note follows the fingers was not measured.
+- Nothing in this release was run on an Android device; the Android package was built.
+- Which picture Evernote shows for a note where none is chosen was not compared with the one Bever finds.
+- pCloud itself was not reached with this version. That a pin and a thumbnail choice reach a second device is tested with the stand-in the core's tests use.
+
 ## 1.1.3 — 2026-11-15
 
 A first synchronization of 4,832 notes ended seventeen minutes in, on one file that Windows would not let be read, with nothing to say what had happened but "os error 225". Started again, it could not be stopped, and Bever could not be quit while it ran. A run now goes on past such a file and names it, can be stopped at any moment, and leaves a record of itself; and quitting quits.

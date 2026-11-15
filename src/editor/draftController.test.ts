@@ -172,6 +172,98 @@ describe('DraftController', () => {
     expect(backend.saves[0]?.baseRevision).toBe(6);
   });
 
+  it('saves nothing when what was changed is taken back', async () => {
+    const backend = library();
+    const controller = new DraftController(note(), backend.persist, 650);
+    controller.update('title', 'Titles');
+    expect(controller.getSnapshot()).toMatchObject({ dirty: true });
+    controller.update('title', 'Title');
+    expect(controller.getSnapshot()).toMatchObject({ dirty: false, saveState: 'saved' });
+    // A tag added and removed, a move there and back: the same.
+    controller.update('tags', ['one', 'two']);
+    controller.update('tags', ['one']);
+    controller.update('notebookId', 'work');
+    controller.update('notebookId', 'inbox');
+    await vi.advanceTimersByTimeAsync(5000);
+    await controller.flush();
+    expect(backend.saves).toHaveLength(0);
+    expect(controller.isDirty).toBe(false);
+  });
+
+  it('saves nothing when the editor reports the page that is stored', async () => {
+    const backend = library();
+    const controller = new DraftController(note(), backend.persist, 650);
+    // As when only the cursor was moved: the editor says that something
+    // happened, and what it shows is what is stored.
+    controller.update('contentHtml', '<p>Stored</p>');
+    controller.update('contentHtml', '<p>Stored</p>');
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(backend.saves).toHaveLength(0);
+    expect(controller.getSnapshot()).toMatchObject({ dirty: false, saveState: 'saved' });
+  });
+
+  it('takes the same tags and details in another order for the same', async () => {
+    const backend = library(note({ tags: ['one', 'two'], attributes: { author: 'Ada', source: 'web' } }));
+    const controller = new DraftController(backend.stored, backend.persist, 650);
+    controller.update('tags', ['two', 'one']);
+    controller.update('attributes', { source: 'web', author: 'Ada' });
+    expect(controller.isDirty).toBe(false);
+    controller.update('attributes', { source: 'web', author: 'Grace' });
+    expect(controller.isDirty).toBe(true);
+    await controller.flush();
+    expect(backend.saves).toHaveLength(1);
+  });
+
+  it('stores again what was taken back while a save was under way', async () => {
+    const backend = library();
+    const controller = new DraftController(note(), backend.persist, 650);
+    backend.holdNextSave();
+    controller.update('title', 'Changed');
+    const first = controller.flush();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(backend.saves).toHaveLength(1);
+    // Back to what it was, while "Changed" is on its way to being stored.
+    controller.update('title', 'Title');
+    backend.finish();
+    await first;
+    await controller.flush();
+    expect(backend.saves.map((save) => save.title)).toEqual(['Changed', 'Title']);
+    expect(backend.stored.title).toBe('Title');
+    expect(controller.getSnapshot()).toMatchObject({ dirty: false, saveState: 'saved' });
+  });
+
+  it('lets each part that was not changed here follow a change from outside', async () => {
+    const backend = library();
+    const controller = new DraftController(note(), backend.persist, 650);
+    controller.update('contentHtml', '<p>typed here</p>');
+    // The note was pinned from the list meanwhile, which is said in its details.
+    const pinned = { 'application-data': { 'bever.pinned': 'inbox 7' } };
+    controller.noteChanged(note({ revision: 6, attributes: pinned }));
+    expect(controller.getSnapshot()).toMatchObject({
+      dirty: true,
+      contentVersion: 0,
+      draft: { contentHtml: '<p>typed here</p>', attributes: pinned },
+    });
+    await controller.flush();
+    expect(backend.saves[0]).toMatchObject({ baseRevision: 6, attributes: pinned });
+    // And a part that was changed here is kept against the one from outside.
+    controller.update('title', 'Mine');
+    controller.noteChanged(
+      note({ revision: 8, title: 'Theirs', contentHtml: '<p>typed here</p>', attributes: pinned }),
+    );
+    expect(controller.getSnapshot().draft.title).toBe('Mine');
+  });
+
+  it('follows the editor’s own other changes, such as a thumbnail chosen, without a save', async () => {
+    const backend = library();
+    const controller = new DraftController(note(), backend.persist, 650);
+    const chosen = { 'application-data': { 'bever.thumbnail': 'none' } };
+    controller.adopt(note({ revision: 6, attributes: chosen }));
+    expect(controller.getSnapshot()).toMatchObject({ dirty: false, draft: { attributes: chosen } });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(backend.saves).toHaveLength(0);
+  });
+
   it('notifies subscribers and stops after dispose', async () => {
     const backend = library();
     const controller = new DraftController(note(), backend.persist, 650);

@@ -5,6 +5,8 @@ import {
   FolderInput,
   Menu,
   Paperclip,
+  Pin,
+  PinOff,
   Plus,
   RotateCcw,
   Search,
@@ -59,6 +61,7 @@ export function NoteList({
   const createNote = useLibraryStore((state) => state.createNote);
   const trashNotes = useLibraryStore((state) => state.trashNotes);
   const restoreNotes = useLibraryStore((state) => state.restoreNotes);
+  const pinNotes = useLibraryStore((state) => state.pinNotes);
   const deleteNotes = useLibraryStore((state) => state.deleteNotes);
   const emptyTrash = useLibraryStore((state) => state.emptyTrash);
   const exportNotes = useLibraryStore((state) => state.exportNotes);
@@ -128,6 +131,11 @@ export function NoteList({
     [notes, checkedIds],
   );
   const allLoadedSelected = notes.length > 0 && selectedNoteIds.length === notes.length;
+  // Whether every selected note is pinned: then the selection can be taken
+  // down, and otherwise pinned.
+  const selectedPinned =
+    selectedNoteIds.length > 0 &&
+    selectedNoteIds.every((id) => notes.find((note) => note.id === id)?.pinned === true);
   const selectionInTrash =
     selectedNoteIds.length > 0 &&
     notes.filter((note) => checkedIds.has(note.id)).every((note) => note.deletedAt !== null);
@@ -318,6 +326,23 @@ export function NoteList({
                   <Tags />
                   Untag
                 </button>
+                {selectedPinned ? (
+                  <button
+                    onClick={() => void pinNotes(selectedNoteIds, false)}
+                    title="Take the selected notes down from the top of their notebooks"
+                  >
+                    <PinOff />
+                    Unpin
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => void pinNotes(selectedNoteIds, true)}
+                    title="Pin the selected notes to the top of their notebooks"
+                  >
+                    <Pin />
+                    Pin
+                  </button>
+                )}
                 {isNative && (
                   <button
                     disabled={busy}
@@ -403,7 +428,7 @@ export function NoteList({
                     key={note.id}
                     className={`note-card ${selectedNote?.id === note.id ? 'selected' : ''} ${
                       checkedIds.has(note.id) ? 'checked' : ''
-                    }`}
+                    } ${note.pinned ? 'pinned' : ''}`}
                     style={place}
                   >
                     <label className="note-select" title={`Select ${note.title || 'Untitled'}`}>
@@ -438,6 +463,11 @@ export function NoteList({
                       )}
                       <div className="note-card-top">
                         <h2>{note.title || 'Untitled'}</h2>
+                        {note.pinned && (
+                          <span className="pinned-mark" title="Pinned to its notebook">
+                            <Pin aria-label="Pinned to its notebook" />
+                          </span>
+                        )}
                         {note.isShortcut && <Star className="shortcut-star" />}
                       </div>
                       <p>

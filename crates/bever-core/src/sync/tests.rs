@@ -1208,3 +1208,61 @@ fn every_run_leaves_a_record_of_when_and_how_it_ended() {
         .all(|pair| pair[0].started_at >= pair[1].started_at));
     assert_eq!(runs[0].outcome, RunOutcome::Complete);
 }
+
+#[test]
+fn a_pin_and_a_thumbnail_choice_reach_the_other_device_without_moving_the_date() {
+    use crate::models::ThumbnailChoice;
+
+    let remote = MemoryRemote::new();
+    let (first, second) = (Device::new(), Device::new());
+    let id = first.add("Marked", "Body", &[]);
+    first.add("Plain", "Body", &[]);
+    first.sync(&remote);
+    second.sync(&remote);
+    let before = second.note(&id);
+
+    first
+        .library
+        .set_pinned(std::slice::from_ref(&id), true)
+        .unwrap();
+    first
+        .library
+        .set_thumbnail(&id, &ThumbnailChoice::None)
+        .unwrap();
+    // Only the marked note is sent, and it is sent as changed.
+    let sent = first.sync(&remote);
+    assert_eq!(sent.pushed, 1);
+    let received = second.sync(&remote);
+    assert_eq!((received.pulled, received.conflicts), (1, 0));
+
+    let after = second.note(&id);
+    assert_eq!(after.updated_at, before.updated_at);
+    assert_eq!(after.content_html, before.content_html);
+    assert_eq!(
+        after.attributes["application-data"]["bever.thumbnail"],
+        "none"
+    );
+    let listed = second
+        .library
+        .list_notes(&NoteFilter {
+            notebook_id: Some(second.inbox()),
+            ..NoteFilter::default()
+        })
+        .unwrap()
+        .notes;
+    // Pinned there as here: first in its notebook.
+    assert_eq!(listed[0].title, "Marked");
+    assert!(listed[0].pinned);
+    assert!(!listed[1].pinned);
+
+    // Taken down on the second device, it is taken down on the first.
+    second
+        .library
+        .set_pinned(std::slice::from_ref(&id), false)
+        .unwrap();
+    second.sync(&remote);
+    first.sync(&remote);
+    assert!(first.note(&id).attributes["application-data"]
+        .get("bever.pinned")
+        .is_none());
+}

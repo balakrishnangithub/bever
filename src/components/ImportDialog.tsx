@@ -543,6 +543,10 @@ function OutcomeRow({ outcome }: { outcome: ImportOutcome }) {
     report.tagsAdded ? `${plural(report.tagsAdded, 'tag')} that no note has added` : null,
     report.tagsNested ? `${plural(report.tagsNested, 'tag')} nested as in Evernote` : null,
     report.shortcutsAdded ? `${plural(report.shortcutsAdded, 'shortcut')} added as in Evernote` : null,
+    report.pinsBrought ? `${plural(report.pinsBrought, 'note')} pinned to notebooks as in Evernote` : null,
+    report.thumbnailsBrought
+      ? `${plural(report.thumbnailsBrought, 'thumbnail')} chosen or removed as in Evernote`
+      : null,
     report.imagesQueued > 0 ? `${plural(report.imagesQueued, 'image')} queued for text recognition` : null,
     report.cancelled
       ? outcome.notebooks === undefined

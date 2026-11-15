@@ -424,6 +424,8 @@ pub fn run() {
             commands::toggle_shortcut,
             commands::organize_notes,
             commands::update_note_timestamps,
+            commands::set_note_thumbnail,
+            commands::set_notes_pinned,
             commands::keep_note_version,
             commands::note_versions,
             commands::restore_note_version,

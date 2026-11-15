@@ -48,6 +48,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::marks::ForeignMarks;
 use crate::{
     enex::{BlobSink, EarlierReading, EnexNote, EnexResource},
     error::{BeverError, Result},
@@ -195,6 +196,13 @@ pub struct LocalImportReport {
     pub notes_in_trash: u64,
     /// Tags that no note has, made because the whole account was imported.
     pub tags_added: u64,
+    /// Notes given the picture Evernote shows them by, or none where the
+    /// thumbnail was removed there.
+    #[serde(default)]
+    pub thumbnails_brought: u64,
+    /// Notes pinned to their notebooks as they are in Evernote.
+    #[serde(default)]
+    pub pins_brought: u64,
     pub cancelled: bool,
     pub warnings: Vec<String>,
 }
@@ -585,6 +593,66 @@ impl EvernoteAccount {
             }
         }
         Ok(parents)
+    }
+
+    /// What Evernote says about notes beside what is in them: the picture
+    /// chosen to stand for a note, or that it is to have none, and the notes
+    /// pinned to a notebook. Empty where this version of Evernote's data
+    /// does not say.
+    fn marks(&self, connection: &Connection) -> Result<Vec<ForeignMarks>> {
+        let mut marks = std::collections::BTreeMap::<String, ForeignMarks>::new();
+        fn of<'a>(
+            marks: &'a mut std::collections::BTreeMap<String, ForeignMarks>,
+            id: &str,
+        ) -> &'a mut ForeignMarks {
+            marks.entry(id.to_owned()).or_insert_with(|| ForeignMarks {
+                evernote_guid: id.to_owned(),
+                thumbnail: None,
+                pinned: None,
+            })
+        }
+        // The hash of the picture chosen for the note; empty where its
+        // thumbnail was removed; nothing where Evernote chooses.
+        if let Ok(mut statement) = connection.prepare(
+            "SELECT id, selectedThumbnailHash FROM Nodes_Note
+             WHERE selectedThumbnailHash IS NOT NULL AND (deleted IS NULL OR deleted = 0)",
+        ) {
+            let chosen = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            for (id, hash) in chosen {
+                of(&mut marks, &id).thumbnail = Some(hash.trim().to_lowercase());
+            }
+        }
+        // The pinned notes are among the account's preferences: for each
+        // notebook, its notes in the order they were pinned in.
+        if let Ok(mut statement) = connection.prepare("SELECT clientInfo FROM Nodes_Preferences") {
+            let preferences = statement
+                .query_map([], |row| row.get::<_, Option<String>>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            for preferences in preferences.into_iter().flatten() {
+                let pinned = serde_json::from_str::<Value>(&preferences)
+                    .ok()
+                    .and_then(|all| all.get("PINNED_NOTES_IN_NOTEBOOK").cloned())
+                    // Kept as text that is itself a list by notebook.
+                    .and_then(|pinned| match pinned {
+                        Value::String(text) => serde_json::from_str::<Value>(&text).ok(),
+                        other => Some(other),
+                    });
+                let Some(Value::Object(notebooks)) = pinned else {
+                    continue;
+                };
+                for notes in notebooks.values() {
+                    let notes = notes.as_array().into_iter().flatten();
+                    for (place, id) in notes.filter_map(Value::as_str).enumerate() {
+                        of(&mut marks, id).pinned = Some(place as i64);
+                    }
+                }
+            }
+        }
+        Ok(marks.into_values().collect())
     }
 
     /// The shortcuts Evernote has, in its order, and how many more it has
@@ -1289,6 +1357,10 @@ pub fn import_local(
         (report.shortcuts_added, report.shortcuts_nowhere) =
             library.add_shortcuts_as(&shortcuts)?;
         report.shortcuts_nowhere += nowhere;
+        // Nor what is said about a note beside what is in it: the picture
+        // that stands for it, and that it is pinned to its notebook.
+        (report.thumbnails_brought, report.pins_brought) =
+            library.offer_marks(&account.marks(&connection)?)?;
     }
     library.optimize()?;
     state.phase = "complete".into();

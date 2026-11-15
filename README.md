@@ -25,7 +25,8 @@ Bever is an independent project. It is not affiliated with, endorsed by, or spon
 - In the sidebar the shortcuts, the notebooks, and the tags are three boxes, each of which folds away and says how many it holds; what is in a stack or in a tag stands further in, under its name.
 - Back and forward among the notes and the lists you have been at, as in a browser: the arrows beside the name, Alt+Left and Alt+Right, or the side buttons of a mouse.
 - The order you choose for the list of notes, and for the notebooks and the tags on their screens, is remembered on the device.
-- The list of notes shows each note by its largest picture, or by the one you choose from a picture's menu (**Use as note thumbnail**).
+- The list of notes shows each note by its largest picture, by the one you choose from a picture's menu (**Use as note thumbnail**), or by none: the thumbnail is taken away, and brought back, in the note's information.
+- A note is pinned to the top of its notebook from its header, from its information, or for several notes at once from the list. The one pinned last stands first.
 - Tags nest inside tags, as deep as you like, and a notebook belongs to a stack; both are shown as they are, and names are listed with their numbers read as numbers (`note-2` before `note-10`).
 - **Notebooks** and **Tags** each have a screen of their own, reached from their heading in the sidebar: find one by name, see how many notes it has, and rename, move, or delete it.
 
@@ -38,6 +39,8 @@ Bever is an independent project. It is not affiliated with, endorsed by, or spon
 - Sketches are begun from a note's toolbar, and those drawn in Evernote open stroke by stroke: draw with a pen or highlighter, erase, snap hand-drawn shapes, change the paper, and save in the form Evernote reads. A pen that reports its pressure draws thin and thick lines. Selected strokes can be moved, resized by a corner, and given another colour or pen size.
 - Annotations on pictures: arrows, shapes, text, stamps, pen, and highlighter. Annotations made in Evernote open as separate marks that can be moved, reworded, and removed, and new ones are stored the same way.
 - A note can be expanded to the whole window (Ctrl+\\), putting the notebooks and the list of notes away.
+- A note is made larger to look at with two fingers spread on it, or with Ctrl and the wheel, as a page of a PDF is: its lines stay as they are, and what does not fit is reached by moving the note.
+- A note is stored anew only when it was changed. Placing and moving the cursor, a letter typed and taken away again, or a keyboard that takes up a word and puts it back leave the note as it is, to its date.
 - Automatic saving. If a note changes underneath an open editor, your version is kept beside it as a conflict copy.
 - A guard against changing a note by mistake: the padlock makes a note read-only; **Discard changes** puts it back as it was when you opened it; and the last five earlier versions of a note are kept on the device, under **Note information**, to be put back. Notes can be made to open read-only.
 - A click on a link while writing offers to open, edit, copy, or remove it; Ctrl+click opens it at once.

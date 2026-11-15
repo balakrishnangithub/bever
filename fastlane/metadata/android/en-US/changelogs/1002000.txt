@@ -1,0 +1,1 @@
+A note is made larger with two fingers, as a page of a PDF is. Notes can be pinned to the top of their notebook and shown without a thumbnail. A note that is only touched is no longer stored anew.

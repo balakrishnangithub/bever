@@ -24,6 +24,7 @@ import type {
   ShortcutTarget,
   SyncRun,
   SyncStatus,
+  ThumbnailChoice,
 } from '../types';
 import { browserApi } from './browserApi';
 import { demoResourceUrl } from './demoResources';
@@ -61,6 +62,10 @@ export interface BeverApi {
     tags: string[],
   ) => Promise<number>;
   updateNoteTimestamps: (id: string, createdAt: number, updatedAt: number) => Promise<Note>;
+  /** Chooses the picture that stands for a note in a list. Not an edit: the note keeps its date. */
+  setNoteThumbnail: (id: string, choice: ThumbnailChoice) => Promise<Note>;
+  /** Pins notes to the top of the notebook each is in, or takes them down. Resolves to how many changed. */
+  setNotesPinned: (ids: string[], pinned: boolean) => Promise<number>;
   /**
    * Keeps the note as it is stored, before the editor changes it, and
    * returns what stands for that form: nothing, for a note with nothing
@@ -170,6 +175,8 @@ const tauriApi: BeverApi = {
   restoreNoteVersion: (id, version) => invoke('restore_note_version', { id, version }),
   updateNoteTimestamps: (id, createdAt, updatedAt) =>
     invoke('update_note_timestamps', { id, createdAt, updatedAt }),
+  setNoteThumbnail: (id, choice) => invoke('set_note_thumbnail', { id, choice }),
+  setNotesPinned: (ids, pinned) => invoke('set_notes_pinned', { ids, pinned }),
   getSettings: () => invoke('get_settings'),
   setSetting: (key, enabled) => invoke('set_setting', { key, enabled }),
   appInfo: () => invoke('app_info'),

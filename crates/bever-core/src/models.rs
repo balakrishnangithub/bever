@@ -98,13 +98,38 @@ pub struct NoteSummary {
     pub has_attachments: bool,
     pub is_shortcut: bool,
     /// SHA-256 of the picture that stands for the note in a list: the one
-    /// chosen for it, or else the largest picture in it.
+    /// chosen for it, or else the largest picture in it; none when the note
+    /// is to have none.
     pub thumbnail: Option<String>,
+    /// Whether the note is pinned to the top of the notebook it is in.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
-/// The key under a note's `application-data` that names, by its MD5, the
-/// picture chosen to stand for the note in a list.
+/// The key under a note's `application-data` that says which picture stands
+/// for the note in a list: the picture's MD5, [`NO_THUMBNAIL`], or
+/// [`AUTOMATIC_THUMBNAIL`]. See `marks.rs`.
 pub const THUMBNAIL_KEY: &str = "bever.thumbnail";
+/// The note is to have no picture in a list.
+pub const NO_THUMBNAIL: &str = "none";
+/// The picture found for the note stands for it, whatever the note said
+/// when it came.
+pub const AUTOMATIC_THUMBNAIL: &str = "auto";
+/// The key under a note's `application-data` that pins the note to the top
+/// of a notebook: the notebook's id, a space, and the note's place among the
+/// pinned, which is the time it was pinned at.
+pub const PINNED_KEY: &str = "bever.pinned";
+
+/// Which picture stands for a note in a list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind", content = "md5")]
+pub enum ThumbnailChoice {
+    /// The one found for the note: the largest that is more than an icon.
+    Automatic,
+    None,
+    /// One of the note's pictures, by its MD5.
+    Picture(String),
+}
 
 /// One page of a note listing together with the size of the whole result.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

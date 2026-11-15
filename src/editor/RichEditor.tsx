@@ -9,11 +9,13 @@ import { useLibraryStore } from '../store/useLibraryStore';
 import { emptyFilter, type Note, type NoteSummary, type Resource } from '../types';
 import { EditorToolbar } from './EditorToolbar';
 import { createExtensions } from './extensions';
+import { faceOf } from './face';
 import { followLink } from './followLink';
 import { withNaturalSize } from './imageLayout';
 import { LinkBubble, type LinkTarget } from './LinkBubble';
 import { ANNOTATE_EVENT, THUMBNAIL_EVENT, type AnnotationRequest } from './nodeViews';
 import { noteFindState, updateNoteFind, type PictureTexts } from './noteFind';
+import { useNoteZoom } from './noteZoom';
 import { hasInk, pngSize } from './pngChunks';
 import type { FindTerm } from './recognition';
 import { noteHtml } from './serialize';
@@ -33,6 +35,8 @@ interface Props {
   editable: boolean;
   /** Changes when the editor must show `note.contentHtml` again. */
   contentVersion: number;
+  /** The note's page as the library has it, which `note.contentHtml` is not while something is unsaved. */
+  storedHtml: string;
   /** What the library was searched for; it is marked in the note. */
   highlight: FindTerm[];
   onChange: (html: string) => void;
@@ -48,6 +52,7 @@ export function RichEditor({
   note,
   editable,
   contentVersion,
+  storedHtml,
   highlight,
   onChange,
   onAttachFiles,
@@ -70,6 +75,12 @@ export function RichEditor({
   const [findCount, setFindCount] = useState(0);
   const [findPictures, setFindPictures] = useState(0);
   const [findActive, setFindActive] = useState(0);
+
+  // The page the editor was given to show, and its face: what of it can be
+  // seen. While the document has that face, the note is that page, however
+  // many times the editor says that something happened to it.
+  const shown = useRef<{ html: string; face: string } | null>(null);
+  const { frame: zoomFrame, zoom, reset: resetZoom } = useNoteZoom();
 
   // The editor is created once per note, so its event handlers reach the
   // current callbacks through this object rather than capturing old ones.
@@ -128,7 +139,17 @@ export function RichEditor({
           return true;
         },
       },
-      onUpdate: ({ editor: instance }) => onChange(noteHtml(instance)),
+      onCreate: ({ editor: instance }) => {
+        shown.current = { html: note.contentHtml, face: faceOf(instance.state.doc) };
+      },
+      // The editor changes its document for reasons that are not the
+      // writer's: a keyboard takes up a word and puts it back, an empty line
+      // is added to write in. Only what changes the note's face is a change
+      // of the note; anything else leaves it the page that is stored.
+      onUpdate: ({ editor: instance }) => {
+        const stored = shown.current;
+        onChange(stored && faceOf(instance.state.doc) === stored.face ? stored.html : noteHtml(instance));
+      },
       onSelectionUpdate: () => setVersion((value) => value + 1),
       onTransaction: () => setVersion((value) => value + 1),
     },
@@ -210,7 +231,19 @@ export function RichEditor({
     if (!editor || shownVersion.current === contentVersion) return;
     shownVersion.current = contentVersion;
     editor.commands.setContent(note.contentHtml, { emitUpdate: false });
+    shown.current = { html: note.contentHtml, face: faceOf(editor.state.doc) };
   }, [editor, contentVersion, note.contentHtml]);
+
+  // Once what was written is stored, and is what the editor shows, the
+  // next change is measured against that. What is typed and not yet stored
+  // is never the measure: a letter taken away again has to come out as no
+  // change at all.
+  useEffect(() => {
+    if (!editor || shown.current?.html === storedHtml) return;
+    if (noteHtml(editor) === storedHtml) {
+      shown.current = { html: storedHtml, face: faceOf(editor.state.doc) };
+    }
+  }, [editor, storedHtml]);
 
   useEffect(() => {
     if (!editor) return;
@@ -395,7 +428,20 @@ export function RichEditor({
           </button>
         </div>
       )}
-      <EditorContent editor={editor} className="editor-content" />
+      <div className="note-zoom" ref={zoomFrame}>
+        <EditorContent editor={editor} className="editor-content" />
+      </div>
+      {zoom > 1 && (
+        <button
+          className="zoom-chip"
+          onClick={resetZoom}
+          title="Show the note at its own size again"
+          aria-label={`Zoomed to ${Math.round(zoom * 100)}%. Show the note at its own size again`}
+        >
+          {Math.round(zoom * 100)}%
+          <X />
+        </button>
+      )}
       {annotating && (
         <Suspense fallback={null}>
           {annotating.sketch ? (

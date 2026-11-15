@@ -151,9 +151,29 @@ impl Library {
 
     /// Saves a note and reports whether the version it replaced had to be
     /// preserved as a conflict copy (see [`SaveNote::base_revision`]).
+    ///
+    /// Saving a note as it already is stored is not a change: nothing is
+    /// written, and the note keeps its time of change and its revision. So
+    /// whatever makes an editor save without anything having been changed
+    /// cannot move a note's date or send it to other devices again.
     pub fn save_note_checked(&self, input: &SaveNote) -> Result<SavedNote> {
         let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
+        let stored = note_with(&transaction, &input.id)?;
+        let mut tags = (stored.tags.clone(), input.tags.clone());
+        tags.0.sort();
+        tags.1.sort();
+        if stored.notebook_id == input.notebook_id
+            && stored.title == input.title.trim()
+            && stored.content_html == input.content_html
+            && sorted_json(&stored.attributes) == sorted_json(&input.attributes)
+            && tags.0 == tags.1
+        {
+            return Ok(SavedNote {
+                note: stored,
+                conflict_copy: None,
+            });
+        }
         let conflict_copy = match input.base_revision {
             Some(base) => preserve_replaced_version(&transaction, input, base)?,
             None => None,
@@ -536,15 +556,21 @@ impl Library {
         let import_key = note_import_key(&note)?;
         let mut connection = self.connection.lock();
         let transaction = connection.transaction()?;
-        let duplicate = transaction
-            .query_row(
-                "SELECT note_id FROM import_sources WHERE import_key = ?1",
-                [&import_key],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        if let Some(existing) = duplicate {
-            return Ok(ImportNoteResult::Duplicate(existing));
+        // Up to 1.1.3 a note's marks were part of its key.
+        for key in [Some(import_key.clone()), marked_import_key(&note)?]
+            .into_iter()
+            .flatten()
+        {
+            let duplicate = transaction
+                .query_row(
+                    "SELECT note_id FROM import_sources WHERE import_key = ?1",
+                    [&key],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if let Some(existing) = duplicate {
+                return Ok(ImportNoteResult::Duplicate(existing));
+            }
         }
         // Here as an earlier version of Bever read it, under another title
         // or without its tasks? Then it is this note, and reading it better
@@ -608,9 +634,19 @@ impl Library {
         let mut kept_both = false;
         if let Some(earlier_id) = earlier_form(&transaction, &note, run_mark)? {
             let earlier = note_with(&transaction, &earlier_id)?;
-            let untouched = transaction
-                .prepare("SELECT 1 FROM import_sources WHERE note_id = ?1 AND import_key = ?2")?
-                .exists(params![earlier.id, note_import_key(&earlier)?])?;
+            let untouched = [
+                Some(note_import_key(&earlier)?),
+                marked_import_key(&earlier)?,
+            ]
+            .into_iter()
+            .flatten()
+            .map(|key| {
+                transaction
+                    .prepare("SELECT 1 FROM import_sources WHERE note_id = ?1 AND import_key = ?2")?
+                    .exists(params![earlier.id, key])
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .contains(&true);
             // Whether this form has every attachment the earlier one has.
             let keeps_all = earlier.resources.iter().all(|had| {
                 note.resources
@@ -1178,7 +1214,24 @@ struct ImportForm {
 /// Those say two things more than a current export does, Evernote's
 /// identifier for the note and the text it recognised in pictures; neither
 /// is part of the key, or the same note would be imported twice.
+///
+/// What is said about a note without being part of it, its marks, is not in
+/// the key: a note that was only pinned, or given another thumbnail, is
+/// still the note that was imported.
 fn note_import_key(note: &Note) -> Result<String> {
+    import_key_with(note, &crate::marks::without_marks(&note.attributes))
+}
+
+/// The key of a note that has marks as it was made up to 1.1.3, when the
+/// marks were part of it. A library has such keys where a note was imported
+/// from an export that Bever itself had written.
+fn marked_import_key(note: &Note) -> Result<Option<String>> {
+    crate::marks::has_marks(&note.attributes)
+        .then(|| import_key_with(note, &note.attributes))
+        .transpose()
+}
+
+fn import_key_with(note: &Note, attributes: &Value) -> Result<String> {
     let mut tags = note.tags.clone();
     tags.sort_by_key(|tag| tag.to_lowercase());
     let resources = note
@@ -1205,7 +1258,7 @@ fn note_import_key(note: &Note) -> Result<String> {
         "title": note.title,
         "createdAt": note.created_at,
         "updatedAt": note.updated_at,
-        "attributes": note.attributes,
+        "attributes": attributes,
         "tags": tags,
         "resources": resources,
     });

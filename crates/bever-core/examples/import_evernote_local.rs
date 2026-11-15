@@ -93,6 +93,10 @@ fn main() -> Result<()> {
         report.shortcuts_added,
         report.shortcuts_nowhere,
     );
+    println!(
+        "{} notes pinned to their notebooks as in Evernote; {} notes given the thumbnail they have there, or none.",
+        report.pins_brought, report.thumbnails_brought,
+    );
     for warning in &report.warnings {
         println!("  {warning}");
     }

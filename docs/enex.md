@@ -6,6 +6,7 @@ Bever reads Evernote `.enex` exports one note at a time. For each note it keeps:
 
 - title, created and updated timestamps, tags, and the Evernote GUID when the export has one;
 - note attributes, including `<application-data>` entries with their keys;
+- the thumbnail chosen for a note, which Evernote writes as `<thumbnail>` among the attributes: the MD5 of the picture, or nothing between the tags where the thumbnail was removed. The list of notes goes by it, and an export writes it back. What is chosen in Bever is kept apart, as `bever.thumbnail` under `application-data`, and comes first;
 - the original ENML content;
 - each resource's bytes, MIME type, dimensions, duration, recognition XML, attributes, and alternate data;
 - note-level elements it does not know, such as Evernote task blocks, as raw XML that is written back on export;

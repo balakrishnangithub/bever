@@ -18,6 +18,8 @@ export interface DraftSnapshot {
  */
 export type Persist = (input: SaveNote, beforeApply: (note: Note) => void) => Promise<unknown>;
 
+const FIELDS = ['notebookId', 'title', 'contentHtml', 'attributes', 'tags'] as const;
+
 const draftOf = (note: Note): Draft => ({
   notebookId: note.notebookId,
   title: note.title,
@@ -26,9 +28,37 @@ const draftOf = (note: Note): Draft => ({
   tags: note.tags,
 });
 
+/** A value as text that is the same whatever order its names were given in. */
+function stable(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stable((value as Record<string, unknown>)[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+/** Whether one part of a draft is the same in two drafts. */
+function same(key: (typeof FIELDS)[number], one: Draft, other: Draft): boolean {
+  if (one[key] === other[key]) return true;
+  // The same tags in another order are the same tags.
+  if (key === 'tags') return stable([...one.tags].sort()) === stable([...other.tags].sort());
+  if (key === 'attributes') return stable(one.attributes) === stable(other.attributes);
+  return false;
+}
+
+const sameDraft = (one: Draft, other: Draft) => FIELDS.every((key) => same(key, one, other));
+
 /**
  * The unsaved state of one open note, and the rules for saving it.
  *
+ * - A draft is unsaved when it differs from what is stored, and only then.
+ *   Whether it does is worked out, not remembered: an edit that is taken
+ *   back, a title typed again as it was, a tag added and removed, leave
+ *   nothing to save, and nothing is saved. So a note is never stored anew,
+ *   and never gets a new date, without having been changed.
  * - Changes are saved a short while after the last one (`delayMs`).
  * - Saves never overlap. Each tells the library which revision it started
  *   from, which is how a version that arrived from another device in the
@@ -44,8 +74,8 @@ export class DraftController {
   private readonly listeners = new Set<() => void>();
   /** Revision of the stored note this draft is based on. */
   private baseRevision: number;
-  /** Counts edits, to tell whether more arrived while a save was running. */
-  private edits = 0;
+  /** What is stored, as far as this draft knows. */
+  private base: Draft;
   private saving: Promise<void> | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
   /** Whether what precedes the first save has been done. */
@@ -64,7 +94,8 @@ export class DraftController {
   ) {
     this.noteId = note.id;
     this.baseRevision = note.revision;
-    this.snapshot = { draft: draftOf(note), dirty: false, saveState: 'saved', contentVersion: 0 };
+    this.base = draftOf(note);
+    this.snapshot = { draft: this.base, dirty: false, saveState: 'saved', contentVersion: 0 };
   }
 
   readonly noteId: string;
@@ -80,39 +111,61 @@ export class DraftController {
     return this.snapshot.dirty;
   }
 
-  /** Records an edit and schedules a save. */
+  /**
+   * Records what a part of the note is now. A save is scheduled when the
+   * draft then differs from what is stored; when it does not, because the
+   * part is what it was or has come back to it, there is nothing to save.
+   */
   update<Key extends keyof Draft>(key: Key, value: Draft[Key]): void {
-    this.edits += 1;
-    this.set({ draft: { ...this.snapshot.draft, [key]: value }, dirty: true });
+    const draft = { ...this.snapshot.draft, [key]: value };
     clearTimeout(this.timer);
-    this.timer = setTimeout(() => void this.flush().catch(() => undefined), this.delayMs);
+    const dirty = !sameDraft(draft, this.base);
+    if (dirty) {
+      this.set({ draft, dirty });
+      this.timer = setTimeout(() => void this.flush().catch(() => undefined), this.delayMs);
+    } else {
+      // Unless a save is under way, which may be storing what was just
+      // taken back: it looks again when it is done.
+      this.set({ draft, dirty, saveState: this.saving ? this.snapshot.saveState : 'saved' });
+    }
   }
 
   /**
    * The stored note is now `note`. Ignored when it is the result of this
    * draft's own save. Otherwise something else changed it (a move, a tag
-   * added from the list, synchronization): without unsaved edits the draft
-   * simply follows; with them, the typed content stays and only notebook
-   * and tags, which the other operation may have changed, are taken over.
+   * added from the list, a pin, synchronization). Each part of the draft
+   * that was not changed here follows the stored note; a part that was
+   * changed here stays as it was typed.
    */
   noteChanged(note: Note): void {
     if (note.revision === this.baseRevision) return;
-    this.baseRevision = note.revision;
-    if (this.snapshot.dirty) {
-      this.set({ draft: { ...this.snapshot.draft, notebookId: note.notebookId, tags: note.tags } });
-    } else {
-      this.set({ draft: draftOf(note), contentVersion: this.snapshot.contentVersion + 1 });
-    }
+    this.follow(note);
   }
 
   /**
    * The editor itself changed the stored note by other means than saving
-   * (it added an attachment, corrected the dates). Call with the stored
-   * result before the application learns of it, so it is not mistaken for a
-   * change from outside.
+   * (it added an attachment, corrected the dates, chose a thumbnail). Call
+   * with the stored result before the application learns of it, so it is
+   * not mistaken for a change from outside.
    */
   adopt(note: Note): void {
+    this.follow(note);
+  }
+
+  private follow(note: Note): void {
     this.baseRevision = note.revision;
+    const stored = draftOf(note);
+    const draft = { ...this.snapshot.draft };
+    let shown = this.snapshot.contentVersion;
+    for (const key of FIELDS) {
+      if (!same(key, draft, this.base) || same(key, draft, stored)) continue;
+      Object.assign(draft, { [key]: stored[key] });
+      if (key === 'contentHtml') shown += 1;
+    }
+    this.base = stored;
+    const dirty = !sameDraft(draft, stored);
+    if (!dirty) clearTimeout(this.timer);
+    this.set({ draft, dirty, contentVersion: shown });
   }
 
   /**
@@ -123,11 +176,11 @@ export class DraftController {
   replace(note: Note): void {
     clearTimeout(this.timer);
     this.baseRevision = note.revision;
-    this.edits += 1;
+    this.base = draftOf(note);
     // What follows is a new beginning, with its own first save.
     this.begun = false;
     this.set({
-      draft: draftOf(note),
+      draft: this.base,
       dirty: false,
       saveState: 'saved',
       contentVersion: this.snapshot.contentVersion + 1,
@@ -140,8 +193,8 @@ export class DraftController {
     // Wait for a running save; it may not include the latest edits.
     while (this.saving) await this.saving.catch(() => undefined);
     if (!this.snapshot.dirty) return;
-    const edits = this.edits;
-    const input: SaveNote = { id: this.noteId, ...this.snapshot.draft, baseRevision: this.baseRevision };
+    const sent = this.snapshot.draft;
+    const input: SaveNote = { id: this.noteId, ...sent, baseRevision: this.baseRevision };
     this.set({ saveState: 'saving' });
     const ready =
       this.begun || !this.beforeFirstSave
@@ -160,8 +213,11 @@ export class DraftController {
       )
       .then(
         () => {
-          // Edits made during the save keep the draft dirty for the next one.
-          if (this.edits === edits) this.set({ dirty: false, saveState: 'saved' });
+          // What was sent is what is stored now. Edits made during the
+          // save keep the draft unsaved for the next one.
+          this.base = sent;
+          const dirty = !sameDraft(this.snapshot.draft, sent);
+          this.set(dirty ? { dirty } : { dirty, saveState: 'saved' });
         },
         (error: unknown) => {
           this.set({ saveState: 'error' });
@@ -173,7 +229,7 @@ export class DraftController {
     });
     this.saving = tracked;
     await tracked;
-    if (this.snapshot.dirty && this.edits !== edits) await this.flush();
+    if (this.snapshot.dirty) await this.flush();
   }
 
   /** Stops the pending timer. Call `flush()` first to keep unsaved edits. */

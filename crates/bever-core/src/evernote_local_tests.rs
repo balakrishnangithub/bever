@@ -1580,3 +1580,152 @@ fn what_is_not_brought_is_counted() {
     assert_eq!(again.tags_added, 0);
     assert_eq!(library.snapshot().unwrap().tags.len(), 2);
 }
+
+impl Evernote {
+    /// The first note has its thumbnail removed and is pinned to its
+    /// notebook; the second is pinned to its own, with a picture chosen
+    /// that it does not have.
+    fn marks(&self) {
+        let pinned =
+            serde_json::json!({ "nb-1": [FIRST], "nb-2": ["not-a-note", SECOND] }).to_string();
+        let preferences =
+            serde_json::json!({ "EDIT_PDF_VIEW": "x", "PINNED_NOTES_IN_NOTEBOOK": pinned })
+                .to_string();
+        self.database
+            .execute_batch(&format!(
+                "ALTER TABLE Nodes_Note ADD COLUMN selectedThumbnailHash TEXT;
+                 UPDATE Nodes_Note SET selectedThumbnailHash = '' WHERE id = '{FIRST}';
+                 UPDATE Nodes_Note SET selectedThumbnailHash = 'ABCDEF0123456789ABCDEF0123456789' WHERE id = '{SECOND}';
+                 CREATE TABLE Nodes_Preferences(id TEXT, clientInfo TEXT);"
+            ))
+            .unwrap();
+        self.database
+            .execute(
+                "INSERT INTO Nodes_Preferences VALUES ('p', ?1)",
+                [preferences],
+            )
+            .unwrap();
+    }
+}
+
+fn pinned_titles(library: &Library) -> Vec<String> {
+    let mut titles = library
+        .list_notes(&NoteFilter::default())
+        .unwrap()
+        .notes
+        .into_iter()
+        .filter(|note| note.pinned)
+        .map(|note| note.title)
+        .collect::<Vec<_>>();
+    titles.sort();
+    titles
+}
+
+#[test]
+fn a_removed_thumbnail_and_pinned_notes_come_as_evernote_has_them() {
+    use crate::models::{ThumbnailChoice, NO_THUMBNAIL, THUMBNAIL_KEY};
+
+    let evernote = Evernote::new();
+    evernote.marks();
+    let account = evernote.account();
+    let (_directory, library) = library();
+    let report = import(&library, &account);
+    assert_eq!((report.thumbnails_brought, report.pins_brought), (2, 2));
+    assert_eq!(pinned_titles(&library), ["First note", "No title here"]);
+    let first = note_titled(&library, "First note");
+    assert_eq!(
+        first.attributes["application-data"][THUMBNAIL_KEY],
+        NO_THUMBNAIL
+    );
+    // The mark is not an edit: the note has the time Evernote gives it,
+    // to the second as an export has it.
+    assert_eq!(first.updated_at, 1_700_000_100_000);
+    let second = note_titled(&library, "No title here");
+    assert_eq!(
+        second.attributes["application-data"][THUMBNAIL_KEY],
+        "abcdef0123456789abcdef0123456789"
+    );
+
+    // Importing again finds every note as it was imported: a mark does not
+    // make a note one that was changed here.
+    let again = import(&library, &account);
+    assert_eq!(
+        (
+            again.notes_imported,
+            again.notes_updated,
+            again.notes_kept_both,
+            again.notes_skipped
+        ),
+        (0, 0, 0, 2)
+    );
+    assert_eq!((again.thumbnails_brought, again.pins_brought), (0, 0));
+
+    // What was changed here afterwards is not brought back…
+    library
+        .set_pinned(std::slice::from_ref(&first.id), false)
+        .unwrap();
+    library
+        .set_thumbnail(&first.id, &ThumbnailChoice::Automatic)
+        .unwrap();
+    let again = import(&library, &account);
+    assert_eq!((again.thumbnails_brought, again.pins_brought), (0, 0));
+    assert_eq!(again.notes_skipped, 2);
+    assert_eq!(pinned_titles(&library), ["No title here"]);
+    assert!(note_titled(&library, "First note")
+        .attributes
+        .get("application-data")
+        .is_none());
+
+    // …while a choice that changed in Evernote is offered anew.
+    evernote
+        .database
+        .execute(
+            "UPDATE Nodes_Note SET selectedThumbnailHash = ?2 WHERE id = ?1",
+            params![FIRST, "00000000000000000000000000000000"],
+        )
+        .unwrap();
+    let again = import(&library, &account);
+    assert_eq!((again.thumbnails_brought, again.pins_brought), (1, 0));
+}
+
+#[test]
+fn a_library_imported_before_gets_its_thumbnails_and_pins_by_importing_again() {
+    let evernote = Evernote::new();
+    let account = evernote.account();
+    let (_directory, library) = library();
+    // As 1.1.3 imported it: Evernote's marks were not looked at.
+    import(&library, &account);
+    assert!(pinned_titles(&library).is_empty());
+    // One of the notes was changed here since.
+    let first = note_titled(&library, "First note");
+    library
+        .save_note(&SaveNote {
+            id: first.id.clone(),
+            notebook_id: first.notebook_id.clone(),
+            title: first.title.clone(),
+            content_html: "<p>Written here</p>".into(),
+            attributes: first.attributes.clone(),
+            tags: first.tags.clone(),
+            base_revision: None,
+        })
+        .unwrap();
+
+    evernote.marks();
+    let report = import(&library, &account);
+    // Nothing is added, and both notes have their marks: the one that was
+    // changed here too, with what was written in it.
+    assert_eq!(
+        (
+            report.notes_imported,
+            report.notes_kept_both,
+            report.notes_skipped
+        ),
+        (0, 0, 2)
+    );
+    assert_eq!((report.thumbnails_brought, report.pins_brought), (2, 2));
+    assert_eq!(pinned_titles(&library), ["First note", "No title here"]);
+    assert_eq!(library.list_notes(&NoteFilter::default()).unwrap().total, 2);
+    assert!(note_titled(&library, "First note")
+        .content_html
+        .contains("Written here"));
+}

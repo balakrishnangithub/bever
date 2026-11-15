@@ -17,8 +17,9 @@ import type {
   ShortcutTarget,
   SyncRun,
   SyncStatus,
+  ThumbnailChoice,
 } from '../types';
-import { chosenThumbnail } from '../types';
+import { isPinned, PINNED_KEY, THUMBNAIL_KEY, thumbnailChoice } from '../types';
 import type { BeverApi } from './api';
 import { byName } from './nameOrder';
 import {
@@ -688,12 +689,33 @@ function snippetFor(note: Note, words: string[]) {
   return excerpt;
 }
 
-/** The picture that stands for a note: the one chosen, or else the largest. */
+/** `attributes` with a mark about the note set, or taken away. */
+function withMark(attributes: Note['attributes'], key: string, value: string | null): Note['attributes'] {
+  const data = attributes['application-data'];
+  const kept = data && typeof data === 'object' && !Array.isArray(data) ? { ...data } : {};
+  if (value === null) delete kept[key];
+  else kept[key] = value;
+  const next = { ...attributes };
+  if (Object.keys(kept).length) next['application-data'] = kept;
+  else delete next['application-data'];
+  return next;
+}
+
+/** The place of a note among those pinned to its notebook; nothing when it is not pinned there. */
+function pinPlace(note: Note): number | null {
+  if (!isPinned(note)) return null;
+  const data = note.attributes['application-data'] as Record<string, unknown>;
+  return Number(String(data[PINNED_KEY]).slice(note.notebookId.length + 1));
+}
+
+/** The picture that stands for a note: the one chosen, or else the largest; none where none is wanted. */
 function thumbnailOf(note: Note): string | null {
+  const choice = thumbnailChoice(note.attributes);
+  if (choice.kind === 'none') return null;
   const shown = note.resources.filter(
     (resource) => resource.mime.startsWith('image/') && note.contentHtml.includes(resource.md5),
   );
-  const chosen = chosenThumbnail(note.attributes);
+  const chosen = choice.kind === 'picture' ? choice.md5 : null;
   const pictures = shown
     .filter((resource) => (resource.width ?? 48) >= 48 && (resource.height ?? 48) >= 48)
     .sort((a, b) => (b.width ?? 0) * (b.height ?? 0) - (a.width ?? 0) * (a.height ?? 0));
@@ -724,6 +746,12 @@ function listNotes(filter: NoteFilter): NotePage {
     .filter((note) => !filter.contains || containsKind(note, filter.contains))
     .filter(matches)
     .sort(order[filter.sort] ?? ((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id)));
+  // In a notebook, the notes pinned to it come first, the one pinned last
+  // before the others.
+  if (filter.notebookId && !filter.query.trim() && !filter.trashOnly) {
+    const place = (note: Note) => pinPlace(note) ?? -Infinity;
+    all.sort((a, b) => place(b) - place(a));
+  }
   const page = all.slice(filter.offset, filter.offset + filter.limit).map((note): NoteSummary => ({
     id: note.id,
     notebookId: note.notebookId,
@@ -737,6 +765,7 @@ function listNotes(filter: NoteFilter): NotePage {
     hasAttachments: note.resources.length > 0,
     isShortcut: snapshot.shortcuts.some((item) => item.targetType === 'note' && item.targetId === note.id),
     thumbnail: thumbnailOf(note),
+    pinned: isPinned(note),
   }));
   return { notes: page, total: all.length };
 }
@@ -1016,6 +1045,10 @@ export const browserApi: BeverApi = {
   }),
   saveNote: demo((input: SaveNote): SavedNote => {
     const previous = requireNote(input.id);
+    // For the checks that are made of the demonstration: how often a note
+    // was stored.
+    const counter = window as unknown as { __beverDemoSaves?: number };
+    counter.__beverDemoSaves = (counter.__beverDemoSaves ?? 0) + 1;
     let conflictCopy: string | null = null;
     if (
       input.baseRevision !== null &&
@@ -1260,6 +1293,35 @@ export const browserApi: BeverApi = {
     notes.set(id, updated);
     return structuredClone(updated);
   }),
+  setNoteThumbnail: demo((id: string, choice: ThumbnailChoice) => {
+    const note = requireNote(id);
+    const exported = typeof note.attributes.thumbnail === 'string';
+    const value =
+      choice.kind === 'picture' ? choice.md5 : choice.kind === 'none' ? 'none' : exported ? 'auto' : null;
+    // Not an edit: the note keeps its date.
+    const updated = {
+      ...note,
+      attributes: withMark(note.attributes, THUMBNAIL_KEY, value),
+      revision: note.revision + 1,
+    };
+    notes.set(id, updated);
+    return structuredClone(updated);
+  }),
+  setNotesPinned: demo((ids: string[], pinned: boolean) => {
+    let changed = 0;
+    ids.forEach((id, index) => {
+      const note = requireNote(id);
+      if (isPinned(note) === pinned) return;
+      const value = pinned ? `${note.notebookId} ${Date.now() + index}` : null;
+      notes.set(id, {
+        ...note,
+        attributes: withMark(note.attributes, PINNED_KEY, value),
+        revision: note.revision + 1,
+      });
+      changed += 1;
+    });
+    return changed;
+  }),
   keepNoteVersion: demo((id: string) => keepVersion(requireNote(id))),
   noteVersions: demo((id: string): NoteVersion[] =>
     (versions.get(id) ?? [])
@@ -1361,6 +1423,8 @@ export const browserApi: BeverApi = {
       notesWithTasks: 2,
       notesInTrash: 2,
       tagsAdded: 5,
+      thumbnailsBrought: 4,
+      pinsBrought: 10,
       cancelled: false,
       warnings: withoutMissing
         ? [

@@ -103,7 +103,15 @@ const evernote = join(work, 'Evernote');
       created INTEGER, dueDate INTEGER, dueDateUIOption TEXT, deleted INTEGER, parent_Note_id TEXT);
     INSERT INTO Nodes_Task VALUES ('task-1', 'Pack the smoke bag', 'completed', 'B', 'group-1', 1700000000000, NULL, NULL, NULL, '${note}');
     INSERT INTO Nodes_Note VALUES ('99999999-2222-3333-4444-555555555555', 'Thrown away', 0, 1, 1, 1700000000000, 'nb-1', NULL, NULL, NULL, NULL);
+    -- What Evernote says about a note beside what is in it: the first note
+    -- has its thumbnail removed, and is pinned to its notebook.
+    ALTER TABLE Nodes_Note ADD COLUMN selectedThumbnailHash TEXT;
+    UPDATE Nodes_Note SET selectedThumbnailHash = '' WHERE id = '${note}';
+    CREATE TABLE Nodes_Preferences(id TEXT, clientInfo TEXT);
   `);
+  database
+    .prepare('INSERT INTO Nodes_Preferences VALUES (?, ?)')
+    .run('preferences', JSON.stringify({ PINNED_NOTES_IN_NOTEBOOK: JSON.stringify({ 'nb-1': [note] }) }));
   database.close();
   const body = join(evernote, 'conduit-fs', site, 'someone', 'rte', 'Note', 'internal_rteDoc', '111', '555');
   mkdirSync(body, { recursive: true });
@@ -485,6 +493,8 @@ try {
   });
   // What came as something else, and what was left in Evernote, is said.
   await expect(finished).toContainText('1 task in 1 note brought as checklists');
+  await expect(finished).toContainText('1 note pinned to notebooks as in Evernote');
+  await expect(finished).toContainText('1 thumbnail chosen or removed as in Evernote');
   await expect(finished.locator('.import-left')).toHaveText(
     'Not brought: 1 note in Evernote’s trash; 1 shortcut that leads to something Evernote has no more, or that is not in the library.',
   );
@@ -532,6 +542,62 @@ try {
   await expect(page.getByRole('heading', { name: 'First note', exact: true })).toHaveCount(1);
   check('importing from Evernote again adds nothing');
 
+  // An imported note is stored as Evernote wrote it. Placing and moving the
+  // cursor in it, a letter typed and taken away again, and a space at the
+  // end of a line leave it so: to the letter, to its date, to its revision.
+  const stored = (title) => {
+    const database = new DatabaseSync(join(dataDirectory, 'bever.db'), { readOnly: true });
+    const row = database
+      .prepare(
+        'SELECT revision, updated_at AS updated, content_html AS html, attributes_json AS attributes FROM notes WHERE title = ?',
+      )
+      .get(title);
+    database.close();
+    return { ...row };
+  };
+  const asImported = stored('First note');
+  expect(asImported.html).toContain('<div>Hello &amp; goodbye</div>');
+  await page.getByRole('heading', { name: 'First note', exact: true }).click();
+  await expect(page.locator('.note-prose')).toContainText('Hello & goodbye');
+  await page.locator('.note-prose p').first().click();
+  for (const key of ['End', 'Home', 'ArrowRight', 'Shift+ArrowRight', 'ArrowDown', 'Control+End']) {
+    await page.keyboard.press(key);
+  }
+  await page.keyboard.press('Control+Home');
+  await page.keyboard.press('End');
+  await page.keyboard.type('x');
+  await page.keyboard.press('Backspace');
+  await page.keyboard.type(' ');
+  await new Promise((done) => setTimeout(done, 2000));
+  expect(stored('First note')).toEqual(asImported);
+  check(
+    'placing and moving the cursor, and a letter typed and taken away, leave an imported note as it was stored',
+  );
+  // A letter that stays is a change, and is stored.
+  await page.keyboard.type('!');
+  await expect.poll(() => stored('First note').revision, { timeout: 10000 }).toBe(asImported.revision + 1);
+  const written = stored('First note');
+  expect(written.html).toContain('Hello &amp; goodbye !');
+  expect(written.updated).toBeGreaterThan(asImported.updated);
+  check('and what is written in it is stored');
+
+  // The note came pinned to its notebook and without a thumbnail, as it is
+  // in Evernote. Taking it down here is not an edit: its date stays.
+  const marks = JSON.parse(asImported.attributes)['application-data'];
+  expect(marks['bever.thumbnail']).toBe('none');
+  expect(marks['bever.pinned']).toMatch(/^[0-9a-f-]{36} \d+$/);
+  await expect(page.locator('.note-card', { hasText: 'First note' }).locator('.pinned-mark')).toBeVisible();
+  await page.getByRole('button', { name: 'Unpin from notebook' }).click();
+  await expect(page.locator('.note-card.pinned')).toHaveCount(0);
+  const takenDown = stored('First note');
+  expect(JSON.parse(takenDown.attributes)['application-data']['bever.pinned']).toBeUndefined();
+  expect(takenDown.updated).toBe(written.updated);
+  expect(takenDown.html).toBe(written.html);
+  await page.getByRole('button', { name: 'Pin to notebook' }).click();
+  await expect(page.locator('.note-card.pinned')).toHaveCount(1);
+  expect(stored('First note').updated).toBe(written.updated);
+  check('a note pinned in Evernote comes pinned; pinning and taking down here do not move its date');
+
   // A note of which Evernote does not have everything: its picture was
   // never fetched. Its text is the first note's, with a picture where that
   // has a text file, which is the same number of letters in the document.
@@ -548,7 +614,7 @@ try {
     writeFileSync(join(bodies, '222', '666', `${second}.dat`), body);
     const database = new DatabaseSync(join(evernote, 'conduit-storage', site, 'UDB-User42+RemoteGraph.sql'));
     database.exec(`
-      INSERT INTO Nodes_Note VALUES ('${second}', 'Second note', 0, 1700000200000, 1700000300000, NULL, 'nb-1', 'Ada', NULL, NULL, NULL);
+      INSERT INTO Nodes_Note VALUES ('${second}', 'Second note', 0, 1700000200000, 1700000300000, NULL, 'nb-1', 'Ada', NULL, NULL, NULL, NULL);
       INSERT INTO Attachment VALUES ('att-2', NULL, 'image/jpeg', 400, 300, 1, '72adfd72c0caeec500581c85d0f5ce67', 16, '[]', NULL, 's1', '${second}');
     `);
     database.close();
