@@ -1,7 +1,7 @@
 //! End-to-end synchronization between libraries through an in-memory remote.
 use serde_json::json;
 
-use super::{remote::memory::MemoryRemote, sync_with_remote, SyncOptions};
+use super::{remote::memory::MemoryRemote, sync_with_remote, Cancel, RunOutcome, SyncOptions};
 use crate::{
     db::Library,
     error::BeverError,
@@ -787,6 +787,7 @@ fn a_custom_remote_folder_keeps_libraries_apart() {
     first.add("Elsewhere", "Body", &[]);
     let options = SyncOptions {
         remote_root: "/Bever-selftest-1".into(),
+        ..SyncOptions::default()
     };
     sync_with_remote(&first.library, &remote, &options, |_| {}).unwrap();
     assert!(!remote.paths().is_empty());
@@ -797,6 +798,7 @@ fn a_custom_remote_folder_keeps_libraries_apart() {
     for invalid in ["", "/", "Bever", "/Bever/", "/a/../b", "/a//b"] {
         let options = SyncOptions {
             remote_root: invalid.into(),
+            ..SyncOptions::default()
         };
         assert!(
             sync_with_remote(&first.library, &remote, &options, |_| {}).is_err(),
@@ -947,10 +949,13 @@ fn a_notebook_list_uploaded_meanwhile_by_another_device_is_merged_not_replaced()
     // The first device begins a run and reads the notebook list…
     let layout = super::Layout::new(super::DEFAULT_REMOTE_ROOT).unwrap();
     let mut ignore = |_| {};
+    let cancel = Cancel::new();
     let mut progress = super::Progress {
         callback: &mut ignore,
         remote: &remote,
         started: std::time::Instant::now(),
+        cancel: &cancel,
+        record: super::history::Recorder::begin(&first.library),
     };
     first.library.ensure_notebook("Mine", None).unwrap();
     let listed = super::RemoteStore::list(&remote, &layout.root)
@@ -1032,4 +1037,174 @@ fn nesting_tags_reaches_other_devices_without_sending_their_notes_again() {
         );
         assert_eq!(device.note(&id).tags, ["Lesson 1"]);
     }
+}
+
+/// Puts a folder where an attachment's file is: the file is there to be
+/// seen and cannot be read, as one that security software withholds.
+fn make_unreadable(device: &Device, sha256: &str) -> Vec<u8> {
+    let path = device.library.blob_path(sha256).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    bytes
+}
+
+#[test]
+fn an_attachment_that_cannot_be_read_holds_back_its_notes_and_the_run_goes_on() {
+    let remote = MemoryRemote::new();
+    let (first, second) = (Device::new(), Device::new());
+    let blocked = first.add("Blocked", "Body", &[]);
+    let withheld = first
+        .library
+        .add_resource(&blocked, &mut &b"withheld bytes"[..], "game.apk", None)
+        .unwrap();
+    // The same file in a second note: one file here, and one reason.
+    let sharing = first.add("Shares it", "Body", &[]);
+    first
+        .library
+        .add_resource(&sharing, &mut &b"withheld bytes"[..], "copy.apk", None)
+        .unwrap();
+    let fine = first.add("Fine", "Body", &[]);
+    let readable = first
+        .library
+        .add_resource(&fine, &mut &b"readable bytes"[..], "notes.pdf", None)
+        .unwrap();
+    first.add("Plain", "Body", &[]);
+    let bytes = make_unreadable(&first, &withheld.sha256);
+
+    let report = first.sync(&remote);
+    assert_eq!((report.pushed, report.blobs_uploaded), (2, 1));
+    assert_eq!(report.warnings.len(), 2, "{:?}", report.warnings);
+    let held = report.warnings.join("\n");
+    assert!(held.contains("“Blocked” was not uploaded"), "{held}");
+    assert!(held.contains("“Shares it” was not uploaded"), "{held}");
+    // Each says which attachment, by the name it has in a note.
+    assert!(
+        held.contains("“game.apk”") || held.contains("“copy.apk”"),
+        "{held}"
+    );
+    let paths = remote.paths();
+    assert!(paths.iter().any(|path| path.ends_with(&readable.sha256)));
+    assert!(!paths.iter().any(|path| path.ends_with(&withheld.sha256)));
+    second.sync(&remote);
+    assert_eq!(second.titles(), ["Fine", "Plain"]);
+    let run = &first.library.sync_runs().unwrap()[0];
+    assert_eq!(
+        (run.outcome, run.held_back, run.pushed),
+        (RunOutcome::Complete, 2, 2)
+    );
+
+    // Nothing is asked of the remote for them meanwhile but the listings…
+    remote.take_uploads();
+    let again = first.sync(&remote);
+    assert_eq!((again.pushed, again.warnings.len()), (0, 2));
+    assert!(remote.take_uploads().is_empty());
+
+    // …and once the file can be read, they go.
+    let path = first.library.blob_path(&withheld.sha256).unwrap();
+    std::fs::remove_dir(&path).unwrap();
+    std::fs::write(&path, bytes).unwrap();
+    let later = first.sync(&remote);
+    assert_eq!((later.pushed, later.blobs_uploaded), (2, 1));
+    assert!(later.warnings.is_empty(), "{:?}", later.warnings);
+    second.sync(&remote);
+    assert_eq!(second.titles(), ["Blocked", "Fine", "Plain", "Shares it"]);
+    assert_eq!(second.note(&blocked).resources[0].sha256, withheld.sha256);
+}
+
+#[test]
+fn a_run_that_is_stopped_ends_at_once_and_the_next_one_finishes_it() {
+    let remote = MemoryRemote::new();
+    let (first, second) = (Device::new(), Device::new());
+    for number in 0..100 {
+        first.add(&format!("Note {number:03}"), "Body", &[]);
+    }
+    let options = SyncOptions::default();
+    let stopped = sync_with_remote(&first.library, &remote, &options, |progress| {
+        // Stopped by whoever watches, as soon as notes begin to go up.
+        if progress.phase == "pushing" {
+            options.cancel.cancel();
+        }
+    });
+    assert!(matches!(stopped, Err(BeverError::Cancelled)), "{stopped:?}");
+    let uploaded = note_uploads(&remote).len();
+    assert!((1..100).contains(&uploaded), "{uploaded} notes went up");
+    let run = &first.library.sync_runs().unwrap()[0];
+    assert_eq!(run.outcome, RunOutcome::Stopped);
+    assert_eq!(run.message, None);
+    assert_eq!(run.pushed as usize, uploaded);
+    assert!(run.ended_at.is_some());
+
+    // What went up stays up, and is not sent again.
+    let finished = first.sync(&remote);
+    assert_eq!(finished.pushed as usize, 100 - uploaded);
+    assert_eq!(note_uploads(&remote).len(), 100 - uploaded);
+    second.sync(&remote);
+    assert_eq!(second.titles().len(), 100);
+    assert_eq!(second.titles(), first.titles());
+}
+
+#[test]
+fn a_run_stopped_before_it_began_asks_nothing_of_the_remote() {
+    let remote = MemoryRemote::new();
+    let first = Device::new();
+    first.add("Waiting", "Body", &[]);
+    let options = SyncOptions::default();
+    options.cancel.cancel();
+    let stopped = sync_with_remote(&first.library, &remote, &options, |_| {});
+    assert!(matches!(stopped, Err(BeverError::Cancelled)));
+    assert_eq!(remote.requests(), 0);
+}
+
+#[test]
+fn every_run_leaves_a_record_of_when_and_how_it_ended() {
+    let remote = MemoryRemote::new();
+    let first = Device::new();
+    assert!(first.library.sync_runs().unwrap().is_empty());
+    let id = first.add("Recorded", "Body", &[]);
+    first
+        .library
+        .add_resource(&id, &mut &b"bytes"[..], "a.bin", None)
+        .unwrap();
+    first.sync(&remote);
+    let runs = first.library.sync_runs().unwrap();
+    assert_eq!(runs.len(), 1);
+    let run = &runs[0];
+    assert_eq!(run.outcome, RunOutcome::Complete);
+    assert_eq!((run.pushed, run.blobs_uploaded, run.held_back), (1, 1, 0));
+    assert!(run.started_at > 0 && run.ended_at.is_some_and(|ended| ended >= run.started_at));
+
+    // A run that fails says why, and how far it came.
+    first.add("Second", "Body", &[]);
+    first.add("Third", "Body", &[]);
+    remote.fail_uploads_after(0);
+    let failed = sync_with_remote(&first.library, &remote, &SyncOptions::default(), |_| {});
+    assert!(failed.is_err());
+    remote.stop_failing();
+    let runs = first.library.sync_runs().unwrap();
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs[0].outcome, RunOutcome::Failed);
+    assert!(runs[0]
+        .message
+        .as_deref()
+        .is_some_and(|message| message.contains("simulated connection loss")));
+    assert_eq!(runs[1].outcome, RunOutcome::Complete);
+
+    // One that never got to say how it ended stays as it was last seen:
+    // the application was closed, or the device went off, under it.
+    drop(super::history::Recorder::begin(&first.library));
+    let runs = first.library.sync_runs().unwrap();
+    assert_eq!(runs[0].outcome, RunOutcome::Running);
+    assert_eq!(runs[0].ended_at, None);
+
+    // The record is of the latest runs, not of all there ever were.
+    for _ in 0..30 {
+        first.sync(&remote);
+    }
+    let runs = first.library.sync_runs().unwrap();
+    assert_eq!(runs.len(), 20);
+    assert!(runs
+        .windows(2)
+        .all(|pair| pair[0].started_at >= pair[1].started_at));
+    assert_eq!(runs[0].outcome, RunOutcome::Complete);
 }

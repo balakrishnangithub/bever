@@ -38,7 +38,7 @@ The browser adapter in `src/lib/browserApi.ts` exists only to exercise the inter
 - `tasks.rs`: Evernote's tasks, from an export or from Evernote's files, as checklists in their note.
 - `ocr.rs`: reads queued images with the bundled models.
 - `pcloud.rs`: client for pCloud's HTTPS API with host allowlisting, retries, and streamed transfers.
-- `sync/`: the engine (`mod.rs`), notes (`notes.rs`), metadata (`metadata.rs`), the storage trait and its in-memory test implementation (`remote.rs`), and bounded parallel transfers (`transfer.rs`).
+- `sync/`: the engine and what stops it (`mod.rs`), notes (`notes.rs`), metadata (`metadata.rs`), the storage trait and its in-memory test implementation (`remote.rs`), bounded parallel transfers (`transfer.rs`), the record a run leaves of itself (`history.rs`), and the way to a storage service over HTTP (`transport.rs`).
 
 ## Shell modules
 
@@ -48,7 +48,7 @@ The browser adapter in `src/lib/browserApi.ts` exists only to exercise the inter
 - `protocol.rs`: the `bever:` protocol.
 - `pcloud_auth.rs`, `android_oauth.rs`, `credentials.rs`: sign-in and token storage.
 - `ocr_worker.rs`: the background text-recognition worker.
-- `sync_controller.rs`, `sync_platform.rs`: the single synchronization worker and its platform lifetime.
+- `sync_controller.rs`, `sync_platform.rs`, `awake.rs`: the single synchronization worker, what stops it, its platform lifetime, and the request to Windows to stay awake while it runs.
 
 ## Trust boundary
 
@@ -106,7 +106,7 @@ Saving is serialized by `draftController.ts`: one save at a time, each carrying 
 
 `src-tauri/src/sync_controller.rs` owns the one native worker, its monotonically versioned progress, and its final report. `src/store/useSyncStore.ts` mirrors that snapshot outside Settings and rejects stale responses. `sync_platform.rs` adapts lifetime management without changing the reusable sync engine.
 
-On desktop, closing during a run hides the main window to the tray; opening it cancels the requested exit, while quitting waits for the worker. On Android, a native `dataSync` foreground service keeps the process alive and reports notification progress. The maintained Kotlin, manifest, and drawable live in `src-tauri/android/app/src/main`; `scripts/sync-android-source.cjs` copies this small overlay into the ignored generated Tauri Android project during `npm run android:init`, `android:dev`, and `android:build`. Generated projects, native binaries, and icons remain outside source control.
+On desktop, closing during a run hides the main window to the tray; opening it cancels the requested exit, while quitting stops the run and leaves. On Android, a native `dataSync` foreground service keeps the process alive and reports notification progress. The maintained Kotlin, manifest, and drawable live in `src-tauri/android/app/src/main`; `scripts/sync-android-source.cjs` copies this small overlay into the ignored generated Tauri Android project during `npm run android:init`, `android:dev`, and `android:build`. Generated projects, native binaries, and icons remain outside source control.
 
 ## Android specifics
 

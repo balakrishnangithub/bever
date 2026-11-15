@@ -6,6 +6,7 @@
 //! never names a path: files are picked in native dialogs opened from Rust.
 #[cfg(target_os = "android")]
 mod android_oauth;
+mod awake;
 mod commands;
 mod credentials;
 mod erase;
@@ -22,14 +23,14 @@ use std::sync::atomic::Ordering;
 use std::sync::{atomic::AtomicBool, Arc};
 
 use bever_core::{
-    error::Result as BeverResult,
-    models::{SyncProgress, SyncReport},
-    sync::sync_with_pcloud_progress,
+    error::{BeverError, Result as BeverResult},
+    models::SyncProgress,
+    sync::{sync_with_remote, Cancel, RemoteStore, SyncOptions, SyncRun},
     Library,
 };
 use files::ImportState;
 use ocr_worker::OcrWorker;
-use sync_controller::{SyncController, SyncStatus};
+use sync_controller::{RunEnd, SyncController, SyncStatus};
 use sync_platform::SyncPlatform;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -49,6 +50,16 @@ pub(crate) struct AppState {
     pub(crate) exit_after_sync: AtomicBool,
 }
 
+/// How long a synchronization that was stopped in order to quit is given to
+/// end before the application leaves without it. It ends within moments;
+/// this is for the one that does not.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const QUIT_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The tray's last entry, which says what choosing it will do.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+struct QuitItem(tauri::menu::MenuItem<tauri::Wry>);
+
 /// Runs blocking work (database, files, network) off the UI thread and turns
 /// its error into the message shown in the interface.
 pub(crate) async fn blocking<T, F>(app: &AppHandle, work: F) -> Result<T, String>
@@ -66,18 +77,47 @@ where
     .map_err(|error| error.to_string())
 }
 
+/// What this library synchronizes with, stopped by `cancel`. pCloud is the
+/// one storage service there is; another would be chosen here, and nothing
+/// else about a run would differ.
+fn remote_store(library: &Library, cancel: Cancel) -> BeverResult<Box<dyn RemoteStore>> {
+    Ok(Box::new(pcloud_auth::client(library)?.stopped_by(cancel)))
+}
+
 fn publish_sync_status(app: &AppHandle, status: &SyncStatus) {
     let _ = app.emit("bever:sync-status", status);
 }
 
-fn finish_sync_run(app: &AppHandle, run_id: u64, result: Result<SyncReport, String>) {
+/// Shows in the tray whether a synchronization is running, and what
+/// quitting would then do.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn show_in_tray(app: &AppHandle, running: bool) {
+    let (quit, tooltip) = if running {
+        ("Stop synchronizing and quit", "Bever is synchronizing")
+    } else {
+        ("Quit", "Bever")
+    };
+    if let Some(item) = app.try_state::<QuitItem>() {
+        let _ = item.0.set_text(quit);
+    }
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        let _ = tray.set_tooltip(Some(tooltip));
+    }
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn show_in_tray(_app: &AppHandle, _running: bool) {}
+
+fn finish_sync_run(app: &AppHandle, run_id: u64, end: RunEnd) {
     let state = app.state::<AppState>();
-    let Some(status) = state.sync.finish(run_id, result) else {
+    let Some(status) = state.sync.finish(run_id, end) else {
         return;
     };
     publish_sync_status(app, &status);
+    show_in_tray(app, false);
     let message = match &status.error {
         Some(error) => format!("Sync failed: {error}"),
+        None if status.stopped => "Synchronization stopped".to_owned(),
         None => "Synchronization complete".to_owned(),
     };
     state.platform.finish(&message);
@@ -112,9 +152,64 @@ fn restore_main_window(app: &AppHandle) {
     }
 }
 
+/// Leaves the application. A synchronization that is running is stopped
+/// first: it leaves both sides consistent, and the next run goes on from
+/// where this one stopped. Quitting is never made to wait for a run to
+/// finish, which may be hours away.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn quit_now(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    if !state.sync.is_running() {
+        app.exit(0);
+        return;
+    }
+    state.exit_after_sync.store(true, Ordering::Release);
+    if let Some(status) = state.sync.stop() {
+        publish_sync_status(app, &status);
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+    // The run ends within moments of being stopped, and the application
+    // leaves when it has (`finish_sync_run`). Should it not end, the
+    // application leaves all the same.
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(QUIT_GRACE);
+        let _ = app.clone().run_on_main_thread(move || {
+            // Unless Bever was opened again meanwhile.
+            if app
+                .state::<AppState>()
+                .exit_after_sync
+                .load(Ordering::Acquire)
+            {
+                app.exit(0);
+            }
+        });
+    });
+}
+
 #[tauri::command]
 fn sync_status(state: State<'_, AppState>) -> SyncStatus {
     state.sync.status()
+}
+
+/// Stops the synchronization that is running. What it has transferred
+/// stays, and the next run goes on from there.
+#[tauri::command]
+fn stop_sync(app: AppHandle) -> SyncStatus {
+    let state = app.state::<AppState>();
+    if let Some(status) = state.sync.stop() {
+        publish_sync_status(&app, &status);
+    }
+    state.sync.status()
+}
+
+/// The latest runs, newest first: when each began and ended, how it ended
+/// and what it moved.
+#[tauri::command]
+async fn sync_history(app: AppHandle) -> Result<Vec<SyncRun>, String> {
+    blocking(&app, |_, state| state.library.sync_runs()).await
 }
 
 #[tauri::command]
@@ -123,16 +218,17 @@ async fn sync_now(app: AppHandle) -> Result<SyncStatus, String> {
     // reported at once. A run that is already going needs no check.
     if !app.state::<AppState>().sync.is_running() {
         blocking(&app, |_, state| {
-            pcloud_auth::load_credentials(&state.library).map(|_| ())
+            remote_store(&state.library, Cancel::new()).map(|_| ())
         })
         .await?;
     }
     let state = app.state::<AppState>();
-    let Some(run_id) = state.sync.begin() else {
+    let Some((run_id, cancel)) = state.sync.begin() else {
         // Another caller won the race; report the run that is in progress.
         return Ok(state.sync.status());
     };
     publish_sync_status(&app, &state.sync.status());
+    show_in_tray(&app, true);
 
     let platform = Arc::clone(&state.platform);
     let started = tauri::async_runtime::spawn_blocking(move || platform.start())
@@ -140,25 +236,34 @@ async fn sync_now(app: AppHandle) -> Result<SyncStatus, String> {
         .map_err(|error| error.to_string())
         .and_then(|result| result.map_err(|error| error.to_string()));
     if let Err(error) = started {
-        finish_sync_run(&app, run_id, Err(error));
+        finish_sync_run(&app, run_id, RunEnd::Failed(error));
         return Ok(state.sync.status());
     }
 
     let library = Arc::clone(&state.library);
     let worker_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let result = pcloud_auth::load_credentials(&library)
-            .and_then(|credentials| {
-                sync_with_pcloud_progress(&library, credentials, |progress: SyncProgress| {
-                    let state = worker_app.state::<AppState>();
-                    state.platform.progress(&progress);
-                    if let Some(status) = state.sync.update(run_id, progress) {
-                        publish_sync_status(&worker_app, &status);
-                    }
-                })
+        // For as long as the run goes, and no longer.
+        let _awake = awake::Awake::hold();
+        let options = SyncOptions {
+            cancel: cancel.clone(),
+            ..SyncOptions::default()
+        };
+        let result = remote_store(&library, cancel).and_then(|remote| {
+            sync_with_remote(&library, &*remote, &options, |progress: SyncProgress| {
+                let state = worker_app.state::<AppState>();
+                state.platform.progress(&progress);
+                if let Some(status) = state.sync.update(run_id, progress) {
+                    publish_sync_status(&worker_app, &status);
+                }
             })
-            .map_err(|error| error.to_string());
-        finish_sync_run(&worker_app, run_id, result);
+        });
+        let end = match result {
+            Ok(report) => RunEnd::Complete(report),
+            Err(BeverError::Cancelled) => RunEnd::Stopped,
+            Err(error) => RunEnd::Failed(error.to_string()),
+        };
+        finish_sync_run(&worker_app, run_id, end);
     });
     Ok(state.sync.status())
 }
@@ -262,6 +367,7 @@ pub fn run() {
                 let open = MenuItem::with_id(app, "open", "Open Bever", true, None::<&str>)?;
                 let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
                 let menu = Menu::with_items(app, &[&open, &quit])?;
+                app.manage(QuitItem(quit));
                 TrayIconBuilder::with_id("main-tray")
                     .icon(
                         app.default_window_icon()
@@ -272,18 +378,7 @@ pub fn run() {
                     .tooltip("Bever")
                     .on_menu_event(|app, event| match event.id.as_ref() {
                         "open" => restore_main_window(app),
-                        "quit" => {
-                            if app.state::<AppState>().sync.is_running() {
-                                app.state::<AppState>()
-                                    .exit_after_sync
-                                    .store(true, Ordering::Release);
-                                if let Some(window) = app.get_webview_window("main") {
-                                    let _ = window.hide();
-                                }
-                            } else {
-                                app.exit(0);
-                            }
-                        }
+                        "quit" => quit_now(app),
                         _ => {}
                     })
                     .build(app)?;
@@ -347,6 +442,8 @@ pub fn run() {
             ocr_worker::ocr_status,
             sync_now,
             sync_status,
+            stop_sync,
+            sync_history,
             finish_close,
             pcloud_auth::pcloud_status,
             pcloud_auth::connect_pcloud,

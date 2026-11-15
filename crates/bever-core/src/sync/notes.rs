@@ -9,7 +9,10 @@
 //! notebook list last, so a second device that synchronizes meanwhile, or
 //! after an interrupted run, meets notes whose notebook is in no list yet;
 //! the description lets it file them correctly all the same.
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    io,
+};
 
 use chrono::Utc;
 use rusqlite::{params, OptionalExtension};
@@ -25,7 +28,7 @@ use super::{
 };
 use crate::{
     db::Library,
-    error::{BeverError, Result},
+    error::{BeverError, FileTrouble, Result},
     models::{Note, Notebook, Stack, SyncReport},
     repository::{
         default_notebook, insert_note, note_with, reindex_note, sorted_json, unindex_note,
@@ -128,6 +131,34 @@ pub(crate) struct Session<'a> {
     files: Vec<RemoteFile>,
     folders: Folders,
     states: HashMap<String, SyncState>,
+    /// Attachment files that could not be read in this run, each with the
+    /// reason: they are not tried again for every note that has them.
+    unreadable: HashMap<String, String>,
+}
+
+/// A note about to be uploaded, and the attachments that must reach the
+/// remote before it.
+struct Candidate {
+    note: Note,
+    /// Digest and file name of each.
+    needs: Vec<(String, String)>,
+}
+
+/// Why an attachment's file could not be read, as the end of the sentence
+/// "… was not uploaded: ".
+fn why_unreadable(name: &str, error: &io::Error) -> String {
+    match FileTrouble::of(error) {
+        Some(FileTrouble::Blocked) => format!(
+            "the security software on this device (Windows Security or another antivirus) blocked its attachment “{name}” because it takes it for harmful. If you trust the file, allow or restore it there and synchronize again."
+        ),
+        Some(FileTrouble::Missing) => {
+            format!("the file of its attachment “{name}” is missing on this device. If security software removed it, importing the note again brings it back.")
+        }
+        Some(FileTrouble::Denied | FileTrouble::InUse) => format!(
+            "its attachment “{name}” is held by another program, or access to it was refused ({error})."
+        ),
+        _ => format!("its attachment “{name}” could not be read ({error})."),
+    }
 }
 
 impl<'a> Session<'a> {
@@ -154,6 +185,7 @@ impl<'a> Session<'a> {
             files,
             folders,
             states: sync_states(library)?,
+            unreadable: HashMap::new(),
         })
     }
 
@@ -181,12 +213,15 @@ impl<'a> Session<'a> {
             .map(|(id, _)| id)
             .collect::<HashSet<_>>();
         let (remote, items) = (self.remote, self.layout.items());
+        let cancel = progress.cancel();
         let mut downloaded = 0;
         for batch in changed.chunks(BATCH) {
+            progress.check()?;
             let mut envelopes = Vec::with_capacity(batch.len());
             for_each_parallel(
                 batch.to_vec(),
                 WORKERS,
+                &cancel,
                 |file| remote.download(&format!("{items}/{}", file.name)),
                 |file, bytes| {
                     let envelope: Envelope = serde_json::from_slice(&bytes).map_err(|error| {
@@ -276,6 +311,7 @@ impl<'a> Session<'a> {
                 };
                 self.record(&note.id, note.revision, &mark, &version)?;
             }
+            progress.seen(report);
         }
         Ok(())
     }
@@ -308,6 +344,7 @@ impl<'a> Session<'a> {
         for_each_parallel(
             wanted,
             WORKERS,
+            &progress.cancel(),
             |(sha, size, _)| {
                 remote.download_to(&layout.blob(sha), *size, &mut |mut reader| {
                     let stored = library.store_blob_reader(&mut reader)?;
@@ -323,6 +360,7 @@ impl<'a> Session<'a> {
             |(_, _, name), ()| {
                 finished += 1;
                 report.blobs_downloaded += 1;
+                progress.seen(report);
                 progress.emit(
                     "attachments",
                     format!("Downloading attachments ({finished} of {total}): {name}"),
@@ -343,6 +381,7 @@ impl<'a> Session<'a> {
         let pending = pending_note_ids(self.library)?;
         let total = pending.len() as u64;
         let (library, remote, layout) = (self.library, self.remote, self.layout);
+        let cancel = progress.cancel();
         let device_id = library.device_id().to_owned();
         // What the remote holds of attachments is asked once, and only when
         // a note with an attachment is uploaded: a run that uploads text
@@ -352,6 +391,7 @@ impl<'a> Session<'a> {
         let mut uploaded_notes = 0;
         let mut uploaded_blobs = 0;
         for batch in pending.chunks(BATCH) {
+            progress.check()?;
             // Keeps the attachment files in place while they are uploaded.
             let _blobs = library.blob_guard();
             let mut notes = Vec::with_capacity(batch.len());
@@ -375,57 +415,86 @@ impl<'a> Session<'a> {
             // is not looked at.
             let known = remote_blobs.as_mut().unwrap_or(&mut no_blobs);
 
-            // A note whose attachment file is missing here cannot be uploaded
-            // whole; it is reported and left for a later run.
+            // A note goes up whole: its attachments first, then the note. One
+            // whose attachment cannot be read here (the file is missing, or
+            // something on this device withholds it) is held back, said so
+            // with the reason, and left for a later run. The other notes go.
             let mut missing = Vec::new();
             let mut queued = HashSet::new();
-            let mut uploadable = Vec::with_capacity(notes.len());
+            let mut candidates = Vec::with_capacity(notes.len());
+            let held_back = |report: &mut SyncReport, note: &Note, reason: &str| {
+                let title = if note.title.is_empty() {
+                    "Untitled"
+                } else {
+                    &note.title
+                };
+                report
+                    .warnings
+                    .push(format!("“{title}” was not uploaded: {reason}"));
+            };
             for note in notes {
                 let mut needed = Vec::new();
-                let mut complete = true;
+                let mut needs = Vec::new();
+                let mut unreadable = None;
                 for resource in &note.resources {
                     let name = resource.file_name.as_deref().unwrap_or("attachment");
                     for sha in [Some(&resource.sha256), resource.alternate_sha256.as_ref()]
                         .into_iter()
                         .flatten()
                     {
-                        if known.contains(sha) || queued.contains(sha) {
+                        if known.contains(sha) {
+                            continue;
+                        }
+                        if let Some(reason) = self.unreadable.get(sha) {
+                            unreadable.get_or_insert_with(|| reason.clone());
+                            continue;
+                        }
+                        needs.push((sha.clone(), name.to_owned()));
+                        if queued.contains(sha) {
                             continue;
                         }
                         match std::fs::metadata(library.blob_path(sha)?) {
                             Ok(file) => needed.push((sha.clone(), file.len(), name.to_owned())),
-                            Err(_) => complete = false,
+                            Err(error) => {
+                                unreadable.get_or_insert_with(|| why_unreadable(name, &error));
+                            }
                         }
                     }
                 }
-                if complete {
-                    for blob in needed {
-                        queued.insert(blob.0.clone());
-                        missing.push(blob);
+                match unreadable {
+                    None => {
+                        for blob in needed {
+                            queued.insert(blob.0.clone());
+                            missing.push(blob);
+                        }
+                        candidates.push(Candidate { note, needs });
                     }
-                    uploadable.push(note);
-                } else {
-                    let title = if note.title.is_empty() {
-                        "Untitled"
-                    } else {
-                        &note.title
-                    };
-                    report.warnings.push(format!(
-                        "“{title}” was not uploaded: one of its attachment files is missing on this device."
-                    ));
+                    Some(reason) => held_back(report, &note, &reason),
                 }
             }
 
             for_each_parallel(
                 missing,
                 WORKERS,
+                &cancel,
                 |(sha, size, _)| {
-                    remote.upload_file(&layout.blob(sha), &library.blob_path(sha)?, *size)
+                    match remote.upload_file(&layout.blob(sha), &library.blob_path(sha)?, *size) {
+                        Ok(()) => Ok(None),
+                        // The file could not be read. Nothing is wrong with
+                        // the remote or the way to it, and the rest can go.
+                        Err(BeverError::Io(error)) => Ok(Some(error)),
+                        Err(error) => Err(error),
+                    }
                 },
-                |(sha, _, name), ()| {
+                |(sha, _, name), unreadable| {
+                    if let Some(error) = unreadable {
+                        self.unreadable.insert(sha, why_unreadable(&name, &error));
+                        return Ok(());
+                    }
                     known.insert(sha);
                     uploaded_blobs += 1;
                     report.blobs_uploaded += 1;
+                    progress.seen(report);
                     progress.emit(
                         "attachments",
                         format!("Uploading attachments ({uploaded_blobs}): {name}"),
@@ -435,6 +504,17 @@ impl<'a> Session<'a> {
                     Ok(())
                 },
             )?;
+            let mut uploadable = Vec::with_capacity(candidates.len());
+            for candidate in candidates {
+                let unreadable = candidate
+                    .needs
+                    .iter()
+                    .find_map(|(sha, _)| self.unreadable.get(sha));
+                match unreadable {
+                    None => uploadable.push(candidate.note),
+                    Some(reason) => held_back(report, &candidate.note, reason),
+                }
+            }
 
             let prepared = uploadable
                 .into_iter()
@@ -480,6 +560,7 @@ impl<'a> Session<'a> {
             for_each_parallel(
                 requests(files),
                 WORKERS,
+                &cancel,
                 |upload| remote.upload_all(&items, &upload.files),
                 |upload, stored| {
                     for ((note, loaded_revision), file) in upload.notes.into_iter().zip(stored) {
@@ -493,6 +574,7 @@ impl<'a> Session<'a> {
                         };
                         self.record(&note.id, note.revision, &mark, &file.version)?;
                         report.pushed += 1;
+                        progress.seen(report);
                         uploaded_notes += 1;
                         progress.emit(
                             "pushing",
@@ -507,7 +589,9 @@ impl<'a> Session<'a> {
                     Ok(())
                 },
             )?;
+            progress.seen(report);
         }
+        progress.check()?;
         self.push_deletions(report, progress)
     }
 
@@ -560,6 +644,7 @@ impl<'a> Session<'a> {
         for_each_parallel(
             requests(files),
             WORKERS,
+            &progress.cancel(),
             |upload| remote.upload_all(&items, &upload.files),
             |upload, stored| {
                 for ((id, revision), file) in upload.notes.into_iter().zip(stored) {
@@ -872,6 +957,26 @@ fn sync_states(library: &Library) -> Result<HashMap<String, SyncState>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_keeps_an_attachment_from_being_read_is_said_in_words() {
+        let missing = why_unreadable("a.pdf", &io::Error::from(io::ErrorKind::NotFound));
+        assert!(missing.contains("“a.pdf” is missing"), "{missing}");
+        let odd = why_unreadable("a.pdf", &io::Error::other("the disk fell out"));
+        assert!(
+            odd.contains("could not be read (the disk fell out)"),
+            "{odd}"
+        );
+        // What Windows answers when its antivirus withholds a file.
+        #[cfg(windows)]
+        {
+            let blocked = why_unreadable("game.apk", &io::Error::from_raw_os_error(225));
+            assert!(blocked.contains("antivirus"), "{blocked}");
+            assert!(blocked.contains("“game.apk”"), "{blocked}");
+            let held = why_unreadable("a.pdf", &io::Error::from_raw_os_error(32));
+            assert!(held.contains("held by another program"), "{held}");
+        }
+    }
 
     #[test]
     fn remote_note_ids_accept_only_note_envelopes() {

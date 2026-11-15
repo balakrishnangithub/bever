@@ -81,6 +81,7 @@ impl Device {
         let client = PCloudClient::new(credentials.clone())?;
         let options = SyncOptions {
             remote_root: root.to_owned(),
+            ..SyncOptions::default()
         };
         let started = Instant::now();
         let report = sync_with_remote(&self.library, &client, &options, |_| {})?;
@@ -507,6 +508,7 @@ fn joined_midway(
     };
     let options = SyncOptions {
         remote_root: root.to_owned(),
+        ..SyncOptions::default()
     };
     let stopped = sync_with_remote(&first.library, &interrupted, &options, |_| {}).is_err();
     let listed = client.list(root)?.unwrap_or_default();

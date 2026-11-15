@@ -46,6 +46,10 @@ pub struct TransferMetrics {
     pub remote_requests: u64,
     pub bytes_uploaded: u64,
     pub bytes_downloaded: u64,
+    /// Requests that were made again because they did not complete.
+    pub retries: u64,
+    /// Times the store said it was being asked too much.
+    pub throttled: u64,
 }
 
 /// Paths use `/` and are absolute within the remote account.
@@ -87,6 +91,8 @@ pub trait RemoteStore: Sync {
     }
 
     /// Creates or replaces a file from a local file without loading it.
+    /// Fails with [`BeverError::Io`] when it is the local file that cannot
+    /// be read, which says nothing about the store or the way to it.
     fn upload_file(&self, path: &str, source: &Path, size: u64) -> Result<()>;
 
     fn metrics(&self) -> TransferMetrics;

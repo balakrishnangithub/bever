@@ -4844,3 +4844,38 @@ span.stack-toggle {
   margin-top: 6px;
   color: var(--muted);
 }
+
+/* The record of synchronization runs, in Settings. */
+.sync-message strong + p {
+  margin-top: 4px !important;
+}
+.sync-runs {
+  margin-top: 10px;
+  font-size: 12px;
+}
+.sync-runs summary {
+  color: var(--muted);
+  cursor: pointer;
+}
+.sync-runs ol {
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  margin: 8px 0 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.sync-runs li {
+  display: grid;
+  gap: 2px;
+  padding: 2px 0 2px 9px;
+  border-left: 2px solid var(--soft-line);
+  line-height: 1.45;
+}
+.sync-runs li.trouble {
+  border-left-color: var(--danger);
+}
+.sync-runs li > span {
+  overflow-wrap: anywhere;
+}

@@ -16,7 +16,7 @@ import { useEffect, useState } from 'react';
 
 import { api, isAndroid, isNative } from '../lib/api';
 import { dialogs } from '../lib/dialogs';
-import { formatBytes, formatDuration } from '../lib/syncProgress';
+import { describeRetries, describeRun, formatBytes, formatDuration } from '../lib/syncProgress';
 import { message, useLibraryStore } from '../store/useLibraryStore';
 import { useSyncStore } from '../store/useSyncStore';
 import type { PCloudStatus } from '../types';
@@ -35,7 +35,9 @@ export function SettingsDialog({
     starting: syncStarting,
     receivedAt: progressReceivedAt,
     error: syncError,
+    runs,
     start: startSync,
+    stop: stopSync,
   } = useSyncStore();
   const settings = useLibraryStore((state) => state.settings);
   const setSetting = useLibraryStore((state) => state.setSetting);
@@ -52,8 +54,13 @@ export function SettingsDialog({
   const [token, setToken] = useState('');
   const [hostname, setHostname] = useState('api.pcloud.com');
   const syncRunning = syncStarting || Boolean(syncStatus?.running);
+  const syncStopping = Boolean(syncStatus?.stopping);
   const syncProgress = syncStatus?.progress ?? null;
   const report = syncStatus?.lastReport ?? null;
+  // The record opens by itself when the latest run did not end well, and
+  // otherwise when it is asked for.
+  const [runsOpen, setRunsOpen] = useState<boolean | null>(null);
+  const latestRun = runs[0] ? describeRun(runs[0], syncRunning) : null;
   // On desktop the command waits for the browser; on Android the app is
   // reopened by a link, so the waiting state comes from the stored status.
   const connecting = busy === 'connect' || Boolean(status?.authorizationPending);
@@ -204,13 +211,23 @@ export function SettingsDialog({
               <div className="settings-buttons sync-primary-actions">
                 <button
                   className="primary-action"
-                  disabled={!isNative || !status?.connected || busy !== null || syncRunning}
+                  disabled={!status?.connected || busy !== null || syncRunning}
                   title={status?.connected ? 'Synchronize with pCloud now' : 'Connect pCloud to enable sync'}
                   onClick={() => void startSync()}
                 >
                   <RefreshCw className={syncRunning ? 'spin' : ''} />
                   {syncRunning ? 'Synchronizing…' : 'Sync now'}
                 </button>
+                {syncStatus?.running && (
+                  <button
+                    className="secondary-action"
+                    disabled={syncStopping}
+                    title="Stop this run. What it has transferred is kept, and the next run goes on from there."
+                    onClick={() => void stopSync()}
+                  >
+                    {syncStopping ? 'Stopping…' : 'Stop'}
+                  </button>
+                )}
                 {status?.connected && (
                   <button
                     className="secondary-action"
@@ -223,8 +240,9 @@ export function SettingsDialog({
               </div>
               <span className="settings-pending">
                 Sync runs when you start it, one run at a time, and keeps going if you close Settings. On
-                Windows, closing the window keeps a running sync in the tray; on Android, a notification shows
-                its progress.
+                Windows, closing the window keeps a running sync in the tray, and the computer is asked not to
+                sleep meanwhile; on Android, a notification shows its progress. Stop ends a run, and so does
+                Quit in the tray: what was transferred is kept, and the next run goes on from there.
               </span>
               {status?.connected ? (
                 <>
@@ -342,14 +360,37 @@ export function SettingsDialog({
                           ↓ {formatBytes(syncProgress.bytesDownloaded)} · ↑{' '}
                           {formatBytes(syncProgress.bytesUploaded)}
                         </span>
+                        {syncProgress.retries > 0 && (
+                          <span title="Requests that did not complete and were made again">
+                            {describeRetries(syncProgress.retries, 0)}
+                          </span>
+                        )}
                       </div>
                     </>
                   )}
                 </div>
               )}
               {(syncError ?? syncStatus?.error) && (
-                <p className="sync-message error" role="alert">
-                  {message(syncError ?? syncStatus?.error)}
+                <div className="sync-message error" role="alert">
+                  <strong>
+                    {syncError
+                      ? 'Synchronization could not start'
+                      : `Synchronization failed after ${formatDuration(syncProgress?.elapsedMs ?? 0)}`}
+                  </strong>
+                  <p>{message(syncError ?? syncStatus?.error)}</p>
+                  {!syncError && (
+                    <p>
+                      What was transferred until then is kept (↑{' '}
+                      {formatBytes(syncProgress?.bytesUploaded ?? 0)}, ↓{' '}
+                      {formatBytes(syncProgress?.bytesDownloaded ?? 0)}); the next run goes on from there.
+                    </p>
+                  )}
+                </div>
+              )}
+              {syncStatus?.stopped && !syncRunning && (
+                <p className="sync-message" role="status">
+                  Synchronization stopped after {formatDuration(syncProgress?.elapsedMs ?? 0)}. What was
+                  transferred is kept, and the next run goes on from there.
                 </p>
               )}
               {notice && (
@@ -370,9 +411,10 @@ export function SettingsDialog({
                   <span className="settings-pending">
                     {report.remoteRequests} requests · ↓ {formatBytes(report.bytesDownloaded)} · ↑{' '}
                     {formatBytes(report.bytesUploaded)}
+                    {report.retries > 0 && ` · ${describeRetries(report.retries, report.throttled)}`}
                   </span>
                   {report.warnings.length > 0 && (
-                    <details className="sync-warnings">
+                    <details className="sync-warnings" open>
                       <summary>
                         {report.warnings.length} {report.warnings.length === 1 ? 'note was' : 'notes were'}{' '}
                         not uploaded
@@ -385,6 +427,30 @@ export function SettingsDialog({
                     </details>
                   )}
                 </div>
+              )}
+              {latestRun && (
+                <details
+                  className="sync-runs"
+                  open={runsOpen ?? latestRun.trouble}
+                  onToggle={(event) => setRunsOpen(event.currentTarget.open)}
+                >
+                  <summary>Recent runs</summary>
+                  <ol>
+                    {runs.slice(0, 10).map((run, index) => {
+                      const told = index === 0 ? latestRun : describeRun(run, false);
+                      return (
+                        <li key={run.startedAt} className={told.trouble ? 'trouble' : undefined}>
+                          <strong>{new Date(run.startedAt).toLocaleString()}</strong>
+                          <span>
+                            {told.headline}
+                            {told.reason && `: ${message(told.reason)}`}
+                          </span>
+                          <span className="settings-pending">{told.moved}</span>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </details>
               )}
             </div>
           </section>
@@ -496,7 +562,11 @@ export function SettingsDialog({
                     <button
                       className="secondary-action danger"
                       disabled={syncRunning || busy !== null || (eraseState !== null && !eraseState.error)}
-                      title={syncRunning ? 'Wait until synchronization has finished' : undefined}
+                      title={
+                        syncRunning
+                          ? 'Stop the synchronization first, or wait until it has finished'
+                          : undefined
+                      }
                       onClick={() => void erase()}
                     >
                       Remove all data from this device…

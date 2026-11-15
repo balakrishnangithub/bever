@@ -1860,6 +1860,80 @@ try {
   await long.screenshot({ path: 'test-results/bever-long-list.png', fullPage: true });
   await long.close();
 
+  // A synchronization that only pretends (?demoSync): a run can be stopped
+  // where it was started, says how it ended, and is in the record of runs.
+  const syncing = await browser.newPage({ viewport: { width: 1440, height: 920 } });
+  syncing.on('pageerror', (error) => errors.push(error.message));
+  syncing.on('console', (message) => {
+    if (message.type() === 'error') errors.push(message.text());
+  });
+  await syncing.goto('http://127.0.0.1:7100/?demoSync', { waitUntil: 'domcontentloaded' });
+  await syncing.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+  await syncing.getByRole('button', { name: 'Settings & sync' }).click();
+  const syncSettings = syncing.getByRole('dialog', { name: 'Settings' });
+  const syncNow = syncSettings.getByRole('button', { name: 'Sync now', exact: true });
+  const stop = syncSettings.getByRole('button', { name: 'Stop', exact: true });
+  await expect(syncNow).toBeEnabled();
+  await expect(stop).toHaveCount(0);
+  // The record is open by itself, because the latest run held a note back.
+  const runs = syncSettings.locator('.sync-runs');
+  await expect(runs.locator('summary')).toHaveText('Recent runs');
+  await expect(runs.locator('li')).toHaveCount(4);
+  await expect(runs.locator('li').nth(0)).toBeVisible();
+  await expect(runs.locator('li').nth(0)).toContainText('Completed in 95:00; 1 note held back');
+  await expect(runs.locator('li').nth(0)).toContainText(
+    '↑ 4,831 notes, 7,785 attachments, 6.2 GB · 3 requests repeated, 1 of them because the storage service asked for fewer',
+  );
+  await expect(runs.locator('li').nth(1)).toContainText(
+    'Failed after 17:00: No connection to the storage service; this device may be offline (No such host is known. (os error 11001))',
+  );
+  await expect(runs.locator('li').nth(2)).toContainText(
+    'Did not finish; last seen at work after 12:00: Bever was closed, or the device slept or was turned off, while it ran.',
+  );
+  await expect(runs.locator('li').nth(3)).toContainText('Stopped after 42.0 s');
+  await expect(runs.locator('li.trouble')).toHaveCount(3);
+  await syncing.screenshot({ path: 'test-results/bever-sync-runs.png', fullPage: true });
+
+  // A run is started, and stopped while it goes.
+  await syncNow.click();
+  await expect(stop).toBeVisible();
+  await expect(syncSettings.getByRole('button', { name: 'Synchronizing…' })).toBeDisabled();
+  await expect(syncSettings.locator('.sync-progress')).toContainText(/Uploading notes \(\d+ of 40\)/);
+  // The record stays open, with the run that is going at its head.
+  await expect(runs.locator('li').first()).toBeVisible();
+  await expect(runs.locator('li').first()).toContainText('Running');
+  await syncing.screenshot({ path: 'test-results/bever-sync-running.png', fullPage: true });
+  await stop.click();
+  await expect(syncSettings.getByRole('button', { name: 'Stopping…' })).toBeDisabled();
+  await expect(syncSettings.locator('.sync-progress')).toContainText('Stopping synchronization…');
+  await expect(
+    syncSettings.getByText(/Synchronization stopped after .* What was transferred is kept/),
+  ).toBeVisible();
+  await expect(stop).toHaveCount(0);
+  await expect(syncNow).toBeEnabled();
+  // Stopping is nobody's failure.
+  await expect(syncSettings.locator('.sync-message.error')).toHaveCount(0);
+  await expect(runs.locator('li')).toHaveCount(5);
+  await expect(runs.locator('li').first()).toContainText('Stopped after');
+  await expect(runs.locator('li').first()).not.toHaveClass(/trouble/);
+  await syncing.screenshot({ path: 'test-results/bever-sync-stopped.png', fullPage: true });
+
+  // On a phone Stop is within reach beside the run; and a run that is left
+  // to itself ends, and says what it moved.
+  await syncing.setViewportSize({ width: 390, height: 844 });
+  await syncNow.scrollIntoViewIfNeeded();
+  await syncNow.click();
+  await expect(stop).toBeVisible();
+  await stop.scrollIntoViewIfNeeded();
+  await checkFullyInViewport(syncing, stop);
+  await syncing.screenshot({ path: 'test-results/bever-mobile-sync-running.png', fullPage: true });
+  await expect(syncSettings.getByText(/Sync complete in/)).toBeVisible({ timeout: 30000 });
+  await expect(syncSettings.getByText('40 notes uploaded', { exact: false })).toBeVisible();
+  await expect(stop).toHaveCount(0);
+  await expect(runs.locator('li').first()).toContainText('Completed in');
+  await expect(runs.locator('li').first()).toContainText('↑ 40 notes, 0 attachments');
+  await syncing.close();
+
   // Importing from the Evernote application on this computer: the source is
   // asked for, the notebooks are shown by stack, and any of them can be left out.
   const importing = await browser.newPage({ viewport: { width: 1440, height: 920 } });

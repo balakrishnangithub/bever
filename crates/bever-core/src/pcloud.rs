@@ -1,39 +1,33 @@
 //! pCloud HTTP API adapter, used only during an explicitly started sync.
 //!
+//! Here is what is pCloud's own: its addresses, its methods, what its
+//! answers mean. How a request is made, stopped, made again and counted is
+//! the same for any storage service and is in `sync/transport.rs`.
+//!
 //! The access token travels in the `Authorization` header, never in a URL,
 //! and request URLs are stripped from errors, so a token cannot end up in an
 //! error message, a notification, or a screenshot.
-use std::{
-    fs::File,
-    io::Read,
-    path::Path,
-    sync::atomic::{AtomicU64, Ordering},
-    thread,
-    time::{Duration, Instant},
-};
+use std::{fs::File, io::Cursor, io::Read, path::Path};
 
-use reqwest::blocking::{multipart, Client, RequestBuilder, Response};
+use reqwest::blocking::multipart;
 use serde_json::Value;
 
 use crate::{
     error::{BeverError, Result},
-    sync::{Listing, RemoteFile, RemoteStore, TransferMetrics},
+    sync::{
+        transport::{LocalFailure, Transport},
+        Cancel, Listing, RemoteFile, RemoteStore, TransferMetrics,
+    },
 };
 
 pub const DEFAULT_CLIENT_ID: &str = "B0DEaAnitD8";
 pub const DEFAULT_REDIRECT_URI: &str = "http://127.0.0.1:53682/";
 pub const MOBILE_REDIRECT_URI: &str = "bever://oauth/pcloud";
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
-/// Time allowed for a small JSON request.
-const API_TIMEOUT: Duration = Duration::from_secs(60);
-/// A transfer may take this long plus one second per `SLOWEST_BYTES_PER_SECOND`.
-const TRANSFER_BASE_TIMEOUT: Duration = Duration::from_secs(120);
-/// Slowest connection a transfer is still expected to finish on.
-const SLOWEST_BYTES_PER_SECOND: u64 = 16 * 1024;
-const ATTEMPTS: u32 = 3;
 /// pCloud's result code for a folder that does not exist.
 const NO_SUCH_FOLDER: i64 = 2005;
+/// pCloud's result codes for having been asked too much.
+const LIMITED: std::ops::RangeInclusive<i64> = 4000..=4999;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PCloudCredentials {
@@ -52,37 +46,57 @@ impl PCloudCredentials {
     }
 }
 
-#[derive(Default)]
-struct Metrics {
-    network_ms: AtomicU64,
-    remote_requests: AtomicU64,
-    bytes_uploaded: AtomicU64,
-    bytes_downloaded: AtomicU64,
-}
-
 pub struct PCloudClient {
     api_base: String,
+    /// The address of a stand-in, in place of pCloud. Content is then
+    /// fetched from there too, and nowhere else.
+    stand_in: Option<String>,
     access_token: String,
-    http: Client,
-    metrics: Metrics,
+    transport: Transport,
 }
 
 impl PCloudClient {
     pub fn new(credentials: PCloudCredentials) -> Result<Self> {
         let api_base = credentials.api_base()?;
-        let http = Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            // Each request sets its own limit; a fixed one would make large
-            // attachments impossible to transfer.
-            .timeout(None)
-            .user_agent(concat!("Bever/", env!("CARGO_PKG_VERSION")))
-            .build()?;
+        Self::build(api_base, None, credentials.access_token)
+    }
+
+    /// A client of something on this computer that answers as pCloud does,
+    /// for tests that must not reach the real service. `base` is
+    /// `http://127.0.0.1:<port>` and nothing else; no sign-in is sent there
+    /// but the word "stand-in".
+    pub fn stand_in(base: &str) -> Result<Self> {
+        let authority = base
+            .strip_prefix("http://")
+            .filter(|authority| {
+                authority
+                    .strip_prefix("127.0.0.1:")
+                    .is_some_and(|port| port.parse::<u16>().is_ok_and(|port| port != 0))
+            })
+            .ok_or_else(|| {
+                BeverError::Invalid("a stand-in for pCloud is http://127.0.0.1:<port>".into())
+            })?;
+        Self::build(
+            base.to_owned(),
+            Some(authority.to_owned()),
+            "stand-in".to_owned(),
+        )
+    }
+
+    fn build(api_base: String, stand_in: Option<String>, access_token: String) -> Result<Self> {
         Ok(Self {
             api_base,
-            access_token: credentials.access_token,
-            http,
-            metrics: Metrics::default(),
+            stand_in,
+            access_token,
+            transport: Transport::new("pCloud")?,
         })
+    }
+
+    /// Makes every request of this client end when `cancel` is set.
+    #[must_use]
+    pub fn stopped_by(mut self, cancel: Cancel) -> Self {
+        self.transport.stopped_by(cancel);
+        self
     }
 
     pub fn user_email(&self) -> Result<Option<String>> {
@@ -115,22 +129,17 @@ impl PCloudClient {
         absent: Option<i64>,
     ) -> Result<Option<Value>> {
         let url = format!("{}/{method}", self.api_base);
-        self.with_retry(|| {
+        self.transport.with_retry(|| {
             let request = self
-                .http
+                .transport
                 .get(&url)
                 .bearer_auth(&self.access_token)
-                .query(parameters)
-                .timeout(API_TIMEOUT);
-            let bytes = self.send(request)?.bytes()?;
-            self.metrics
-                .bytes_downloaded
-                .fetch_add(bytes.len() as u64, Ordering::Relaxed);
-            let value: Value = serde_json::from_slice(&bytes)?;
+                .query(parameters);
+            let value: Value = serde_json::from_slice(&self.transport.ask(request)?)?;
             if absent.is_some() && value.get("result").and_then(Value::as_i64) == absent {
                 return Ok(None);
             }
-            check_result(value).map(Some)
+            self.checked(value).map(Some)
         })
     }
 
@@ -144,10 +153,15 @@ impl PCloudClient {
             .and_then(|hosts| hosts.first())
             .and_then(Value::as_str)
             .ok_or_else(|| BeverError::Remote("pCloud returned no download host".into()))?;
-        let valid_host = host.ends_with(".pcloud.com")
-            && host
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'));
+        let valid_host = match &self.stand_in {
+            Some(authority) => host == authority,
+            None => {
+                host.ends_with(".pcloud.com")
+                    && host
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+            }
+        };
         if !valid_host {
             return Err(BeverError::Remote(
                 "pCloud returned an invalid download host".into(),
@@ -158,81 +172,71 @@ impl PCloudClient {
             .and_then(Value::as_str)
             .filter(|path| path.starts_with('/'))
             .ok_or_else(|| BeverError::Remote("pCloud returned no download path".into()))?;
-        Ok(format!("https://{host}{remote_path}"))
+        let scheme = if self.stand_in.is_some() {
+            "http"
+        } else {
+            "https"
+        };
+        Ok(format!("{scheme}://{host}{remote_path}"))
     }
 
-    fn upload_part(
+    /// Uploads into `folder` the parts that `parts` makes, anew for each
+    /// attempt, `size` bytes in all. Returns pCloud's answer.
+    fn upload_parts(
         &self,
-        path: &str,
+        folder: &str,
         size: u64,
-        part: impl Fn() -> Result<multipart::Part>,
-    ) -> Result<()> {
-        let (directory, filename) = path
-            .rsplit_once('/')
-            .filter(|(_, filename)| !filename.is_empty())
-            .ok_or_else(|| BeverError::Invalid("invalid remote file path".into()))?;
-        let directory = if directory.is_empty() { "/" } else { directory };
+        named: Option<&str>,
+        parts: impl Fn(&LocalFailure) -> Result<Vec<multipart::Part>>,
+    ) -> Result<Value> {
         let url = format!("{}/uploadfile", self.api_base);
-        self.with_retry(|| {
-            let part = part()?
-                .file_name(filename.to_owned())
-                .mime_str("application/octet-stream")?;
+        // Without `nopartial` an interrupted upload would leave a truncated
+        // file behind.
+        let mut query = vec![("path", folder), ("nopartial", "1")];
+        if let Some(filename) = named {
+            query.push(("filename", filename));
+        }
+        let answer = self.transport.with_retry(|| {
+            let local = LocalFailure::default();
+            let mut form = multipart::Form::new();
+            for part in parts(&local)? {
+                form = form.part("file", part);
+            }
             let request = self
-                .http
+                .transport
                 .post(&url)
                 .bearer_auth(&self.access_token)
-                // Without `nopartial` an interrupted upload would leave a
-                // truncated file behind.
-                .query(&[("path", directory), ("filename", filename), ("nopartial", "1")])
-                .multipart(multipart::Form::new().part("file", part))
-                .timeout(transfer_timeout(size));
-            let bytes = self.send(request)?.bytes()?;
-            check_result(serde_json::from_slice(&bytes)?)?;
-            self.metrics
-                .bytes_uploaded
-                .fetch_add(size, Ordering::Relaxed);
-            Ok(())
-        })
+                .query(&query)
+                .multipart(form);
+            let answer = self.transport.upload(request, size, &local)?;
+            self.checked(serde_json::from_slice(&answer)?)
+        })?;
+        self.transport.uploaded(size);
+        Ok(answer)
     }
 
-    fn send(&self, request: RequestBuilder) -> Result<Response> {
-        let started = Instant::now();
-        let response = request.send();
-        self.metrics.remote_requests.fetch_add(1, Ordering::Relaxed);
-        self.metrics.network_ms.fetch_add(
-            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-            Ordering::Relaxed,
-        );
-        let response = response?;
-        let status = response.status();
-        if status.is_server_error() || status.as_u16() == 429 {
-            return Err(BeverError::Network(format!(
-                "pCloud is temporarily unavailable (HTTP {})",
-                status.as_u16()
-            )));
+    /// Turns pCloud's `result` code into success or a classified error.
+    fn checked(&self, value: Value) -> Result<Value> {
+        let result = value.get("result").and_then(Value::as_i64);
+        if result.is_some_and(|result| LIMITED.contains(&result)) {
+            self.transport.throttled();
         }
-        if !status.is_success() {
-            return Err(BeverError::Remote(format!(
-                "pCloud refused the request (HTTP {})",
-                status.as_u16()
-            )));
-        }
-        Ok(response)
+        check_result(value)
     }
 
-    fn with_retry<T>(&self, mut attempt: impl FnMut() -> Result<T>) -> Result<T> {
-        let mut delay = Duration::from_secs(1);
-        let mut tries = 1;
-        loop {
-            match attempt() {
-                Err(error) if error.is_transient() && tries < ATTEMPTS => {
-                    thread::sleep(delay);
-                    delay *= 3;
-                    tries += 1;
-                }
-                result => return result,
-            }
-        }
+    /// One file of an upload: what `content` gives, `size` bytes of it.
+    fn part(
+        &self,
+        content: impl Read + Send + 'static,
+        size: u64,
+        name: &str,
+        local: &LocalFailure,
+    ) -> Result<multipart::Part> {
+        Ok(
+            multipart::Part::reader_with_length(self.transport.outgoing(content, local), size)
+                .file_name(name.to_owned())
+                .mime_str("application/octet-stream")?,
+        )
     }
 }
 
@@ -280,19 +284,11 @@ impl RemoteStore for PCloudClient {
         expected_size: u64,
         sink: &mut dyn FnMut(&mut dyn Read) -> Result<()>,
     ) -> Result<()> {
-        self.with_retry(|| {
-            let url = self.content_url(path)?;
+        self.transport.with_retry(|| {
             // The link itself authorizes the download; the token stays home.
-            let request = self.http.get(url).timeout(transfer_timeout(expected_size));
-            let mut response = CountingReader {
-                inner: self.send(request)?,
-                count: &self.metrics.bytes_downloaded,
-            };
-            sink(&mut response).map_err(|error| match error {
-                // A connection that drops mid-body surfaces as an I/O error.
-                BeverError::Io(error) => BeverError::Network(error.to_string()),
-                other => other,
-            })
+            let url = self.content_url(path)?;
+            self.transport
+                .fetch(self.transport.get(&url), expected_size, sink)
         })
     }
 
@@ -303,30 +299,14 @@ impl RemoteStore for PCloudClient {
             return Ok(Vec::new());
         }
         let size = files.iter().map(|(_, bytes)| bytes.len() as u64).sum();
-        let url = format!("{}/uploadfile", self.api_base);
-        let answer = self.with_retry(|| {
-            let mut form = multipart::Form::new();
-            for (name, bytes) in files {
-                let part = multipart::Part::bytes(bytes.clone())
-                    .file_name(name.clone())
-                    .mime_str("application/octet-stream")?;
-                form = form.part("file", part);
-            }
-            let request = self
-                .http
-                .post(&url)
-                .bearer_auth(&self.access_token)
-                // Without `nopartial` an interrupted upload would leave a
-                // truncated file behind.
-                .query(&[("path", folder), ("nopartial", "1")])
-                .multipart(form)
-                .timeout(transfer_timeout(size));
-            let bytes = self.send(request)?.bytes()?;
-            check_result(serde_json::from_slice(&bytes)?)
+        let answer = self.upload_parts(folder, size, None, |local| {
+            files
+                .iter()
+                .map(|(name, bytes)| {
+                    self.part(Cursor::new(bytes.clone()), bytes.len() as u64, name, local)
+                })
+                .collect()
         })?;
-        self.metrics
-            .bytes_uploaded
-            .fetch_add(size, Ordering::Relaxed);
         let stored = answer
             .get("metadata")
             .and_then(Value::as_array)
@@ -347,34 +327,24 @@ impl RemoteStore for PCloudClient {
     }
 
     fn upload_file(&self, path: &str, source: &Path, size: u64) -> Result<()> {
-        self.upload_part(path, size, || {
-            Ok(multipart::Part::reader_with_length(
+        let (directory, filename) = path
+            .rsplit_once('/')
+            .filter(|(_, filename)| !filename.is_empty())
+            .ok_or_else(|| BeverError::Invalid("invalid remote file path".into()))?;
+        let directory = if directory.is_empty() { "/" } else { directory };
+        self.upload_parts(directory, size, Some(filename), |local| {
+            Ok(vec![self.part(
                 File::open(source)?,
                 size,
-            ))
+                filename,
+                local,
+            )?])
         })
+        .map(|_| ())
     }
 
     fn metrics(&self) -> TransferMetrics {
-        TransferMetrics {
-            network_ms: self.metrics.network_ms.load(Ordering::Relaxed),
-            remote_requests: self.metrics.remote_requests.load(Ordering::Relaxed),
-            bytes_uploaded: self.metrics.bytes_uploaded.load(Ordering::Relaxed),
-            bytes_downloaded: self.metrics.bytes_downloaded.load(Ordering::Relaxed),
-        }
-    }
-}
-
-struct CountingReader<'a, R> {
-    inner: R,
-    count: &'a AtomicU64,
-}
-
-impl<R: Read> Read for CountingReader<'_, R> {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        let read = self.inner.read(buffer)?;
-        self.count.fetch_add(read as u64, Ordering::Relaxed);
-        Ok(read)
+        self.transport.metrics()
     }
 }
 
@@ -391,10 +361,6 @@ fn remote_file(entry: &Value) -> Option<RemoteFile> {
         size: entry.get("size").and_then(Value::as_u64).unwrap_or(0),
         version,
     })
-}
-
-fn transfer_timeout(bytes: u64) -> Duration {
-    TRANSFER_BASE_TIMEOUT + Duration::from_secs(bytes / SLOWEST_BYTES_PER_SECOND)
 }
 
 /// Turns pCloud's `result` code into success or a classified error.
@@ -414,17 +380,29 @@ fn check_result(value: Value) -> Result<Value> {
         2008 => Err(BeverError::Remote(
             "your pCloud storage is full; free some space and synchronize again".into(),
         )),
-        // 4xxx: rate limits; 5xxx: faults inside pCloud. Both pass.
-        4000..=5999 => Err(BeverError::Network(format!("pCloud {result}: {message}"))),
+        // 4xxx: limits on how much may be asked. They pass.
+        result if LIMITED.contains(&result) => Err(BeverError::Network(format!(
+            "pCloud takes no more requests from this device for now ({message}, code {result})"
+        ))),
+        // 5xxx: faults inside pCloud. They pass too.
+        5000..=5999 => Err(BeverError::Network(format!(
+            "pCloud could not carry out the request ({message}, code {result})"
+        ))),
         _ => Err(BeverError::Remote(format!("pCloud {result}: {message}"))),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    };
+
     use serde_json::json;
 
     use super::*;
+    use crate::sync::transport::testing::{body, respond, serve};
 
     #[test]
     fn only_official_api_hosts_are_accepted() {
@@ -439,26 +417,28 @@ mod tests {
         };
         assert!(invalid.api_base().is_err());
         assert!(PCloudClient::new(invalid).is_err());
+        // A sign-in never names this computer: only a test does, apart.
+        let local = PCloudCredentials {
+            access_token: "token".into(),
+            hostname: "127.0.0.1:8080".into(),
+        };
+        assert!(PCloudClient::new(local).is_err());
     }
 
     #[test]
-    fn request_metrics_start_at_zero_without_network_access() {
-        let client = PCloudClient::new(PCloudCredentials {
-            access_token: "test-token".into(),
-            hostname: "api.pcloud.com".into(),
-        })
-        .unwrap();
-        assert_eq!(client.metrics(), TransferMetrics::default());
-    }
-
-    #[test]
-    fn large_transfers_get_proportionally_more_time() {
-        assert_eq!(transfer_timeout(0), TRANSFER_BASE_TIMEOUT);
-        // 1 GiB at the slowest supported speed, plus the base allowance.
-        assert_eq!(
-            transfer_timeout(1024 * 1024 * 1024),
-            TRANSFER_BASE_TIMEOUT + Duration::from_secs(65_536)
-        );
+    fn a_stand_in_is_on_this_computer_and_nowhere_else() {
+        assert!(PCloudClient::stand_in("http://127.0.0.1:8080").is_ok());
+        for elsewhere in [
+            "http://example.com:8080",
+            "https://127.0.0.1:8080",
+            "http://127.0.0.1",
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:8080/path",
+            "http://127.0.0.1:8080@example.com",
+            "http://localhost:8080",
+        ] {
+            assert!(PCloudClient::stand_in(elsewhere).is_err(), "{elsewhere}");
+        }
     }
 
     #[test]
@@ -475,6 +455,15 @@ mod tests {
                 .unwrap_err()
                 .is_transient()
         );
+        let limited =
+            check_result(json!({ "result": 4000, "error": "Too many login tries." })).unwrap_err();
+        assert!(limited.is_transient());
+        assert!(
+            limited.to_string().contains("no more requests")
+                && limited.to_string().contains("Too many login tries")
+                && limited.to_string().contains("4000"),
+            "{limited}"
+        );
         assert!(
             !check_result(json!({ "result": 2009, "error": "File not found." }))
                 .unwrap_err()
@@ -483,16 +472,142 @@ mod tests {
         assert!(check_result(json!({})).is_err());
     }
 
+    /// A client of `base` that does not wait between attempts.
+    fn impatient(base: &str) -> PCloudClient {
+        let mut client = PCloudClient::stand_in(base).unwrap();
+        client.transport.impatient();
+        client
+    }
+
     #[test]
-    fn transport_errors_never_reveal_the_request_url() {
-        // Nothing listens on this port, so the request fails locally.
-        let error = Client::new()
-            .get("http://127.0.0.1:9/listfolder?access_token=SECRET-TOKEN&path=/Bever")
-            .timeout(Duration::from_secs(5))
-            .send()
-            .unwrap_err();
-        let message = BeverError::from(error).to_string();
-        assert!(!message.contains("SECRET-TOKEN"), "{message}");
-        assert!(!message.contains("127.0.0.1"), "{message}");
+    fn files_go_up_and_come_down_through_a_stand_in() {
+        let stored = Arc::new(Mutex::new(Vec::new()));
+        let kept = Arc::clone(&stored);
+        let base = serve(move |asked, stream| {
+            if asked.path.starts_with("/uploadfile") {
+                let sent = body(asked, stream);
+                // The content is between the part's headers and the closing
+                // boundary; a test may look for it there.
+                assert!(String::from_utf8_lossy(&sent).contains("hello"));
+                *kept.lock().unwrap() = b"hello".to_vec();
+                respond(
+                    stream,
+                    200,
+                    br#"{"result":0,"metadata":[{"name":"note-1.json","size":5,"hash":77}]}"#,
+                );
+            } else if asked.path.starts_with("/getfilelink") {
+                let host = stream.local_addr().unwrap().to_string();
+                let answer = json!({ "result": 0, "hosts": [host], "path": "/content/one" });
+                respond(stream, 200, answer.to_string().as_bytes());
+            } else if asked.path == "/content/one" {
+                let content = kept.lock().unwrap().clone();
+                respond(stream, 200, &content);
+            } else {
+                respond(stream, 404, b"");
+            }
+        });
+        let client = impatient(&base);
+        let files = client
+            .upload_all("/Bever/items", &[("note-1.json".into(), b"hello".to_vec())])
+            .unwrap();
+        assert_eq!(
+            (
+                files[0].name.as_str(),
+                files[0].size,
+                files[0].version.as_str()
+            ),
+            ("note-1.json", 5, "77")
+        );
+        assert_eq!(
+            client.download("/Bever/items/note-1.json").unwrap(),
+            b"hello"
+        );
+        let metrics = client.metrics();
+        assert_eq!((metrics.bytes_uploaded, metrics.retries), (5, 0));
+        assert!(metrics.bytes_downloaded >= 5);
+    }
+
+    #[test]
+    fn content_is_fetched_only_from_where_the_service_is() {
+        let base = serve(|_, stream| {
+            let answer =
+                json!({ "result": 0, "hosts": ["elsewhere.example.com"], "path": "/content" });
+            respond(stream, 200, answer.to_string().as_bytes());
+        });
+        let error = impatient(&base).download("/Bever/items/a").unwrap_err();
+        assert!(
+            error.to_string().contains("invalid download host"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn being_asked_too_much_in_pclouds_own_words_is_counted_and_asked_again() {
+        let asked_times = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&asked_times);
+        let base = serve(
+            move |_, stream| match count.fetch_add(1, Ordering::SeqCst) {
+                0 => respond(
+                    stream,
+                    200,
+                    br#"{"result":4000,"error":"Too many requests."}"#,
+                ),
+                _ => respond(
+                    stream,
+                    200,
+                    br#"{"result":0,"email":"someone@example.com"}"#,
+                ),
+            },
+        );
+        let client = impatient(&base);
+        assert_eq!(
+            client.user_email().unwrap().as_deref(),
+            Some("someone@example.com")
+        );
+        let metrics = client.metrics();
+        assert_eq!((metrics.retries, metrics.throttled), (1, 1));
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_is_an_error_of_the_file() {
+        let asked_times = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&asked_times);
+        let base = serve(move |asked, stream| {
+            count.fetch_add(1, Ordering::SeqCst);
+            body(asked, stream);
+            respond(stream, 200, br#"{"result":0,"metadata":[]}"#);
+        });
+        let client = impatient(&base);
+        // A folder where a file should be: it opens, or reads, with an
+        // error of the file system, whichever the system does.
+        let directory = tempfile::tempdir().unwrap();
+        let result = client.upload_file("/Bever/blobs/odd", directory.path(), 10);
+        assert!(matches!(result, Err(BeverError::Io(_))), "{result:?}");
+        // It was not asked again and again, as a lost connection would be.
+        assert_eq!(client.metrics().retries, 0);
+        assert!(asked_times.load(Ordering::SeqCst) <= 1);
+
+        let missing = client.upload_file("/Bever/blobs/none", &directory.path().join("none"), 10);
+        assert!(matches!(missing, Err(BeverError::Io(_))), "{missing:?}");
+    }
+
+    #[test]
+    fn a_stopped_client_asks_nothing() {
+        let asked_times = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&asked_times);
+        let base = serve(move |_, stream| {
+            count.fetch_add(1, Ordering::SeqCst);
+            respond(stream, 200, br#"{"result":0}"#);
+        });
+        let cancel = Cancel::new();
+        let client = impatient(&base).stopped_by(cancel.clone());
+        assert!(client.ensure_folder("/Bever").is_ok());
+        cancel.cancel();
+        assert!(matches!(
+            client.ensure_folder("/Bever/items"),
+            Err(BeverError::Cancelled)
+        ));
+        assert!(matches!(client.list("/Bever"), Err(BeverError::Cancelled)));
+        assert_eq!(asked_times.load(Ordering::SeqCst), 1);
     }
 }

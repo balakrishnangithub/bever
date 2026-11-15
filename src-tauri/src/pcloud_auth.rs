@@ -56,7 +56,56 @@ pub(crate) async fn pcloud_status(app: AppHandle) -> Result<PCloudStatus, String
     blocking(&app, |_, state| pcloud_status_inner(&state.library)).await
 }
 
+/// The address of a stand-in for pCloud on this computer, when a test names
+/// one in `BEVER_PCLOUD_STAND_IN`. Only a library that is itself named by
+/// `BEVER_DATA_DIR` listens to it: the installed application, with the
+/// user's own library and sign-in, never does. While a stand-in is used, no
+/// sign-in is read, saved, removed or sent anywhere.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) fn stand_in() -> Option<String> {
+    if !crate::erase::is_other_library() {
+        return None;
+    }
+    std::env::var("BEVER_PCLOUD_STAND_IN")
+        .ok()
+        .filter(|base| !base.is_empty())
+}
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub(crate) fn stand_in() -> Option<String> {
+    None
+}
+
+/// pCloud, by the saved sign-in.
+pub(crate) fn client(library: &Library) -> BeverResult<PCloudClient> {
+    match stand_in() {
+        Some(base) => PCloudClient::stand_in(&base),
+        None => PCloudClient::new(load_credentials(library)?),
+    }
+}
+
+/// Refuses to change the sign-in while a stand-in is used in its place.
+fn not_with_a_stand_in() -> BeverResult<()> {
+    match stand_in() {
+        Some(_) => Err(BeverError::Invalid(
+            "a stand-in for pCloud is in use; the sign-in is left alone".into(),
+        )),
+        None => Ok(()),
+    }
+}
+
 pub(crate) fn pcloud_status_inner(library: &Library) -> BeverResult<PCloudStatus> {
+    if let Some(base) = stand_in() {
+        return Ok(PCloudStatus {
+            connected: true,
+            email: None,
+            hostname: base,
+            last_sync_at: library
+                .setting("last_sync_at")?
+                .and_then(|value| value.parse().ok()),
+            authorization_pending: false,
+        });
+    }
     let hostname = library
         .setting("pcloud_hostname")?
         .unwrap_or_else(|| "api.pcloud.com".to_owned());
@@ -149,6 +198,7 @@ pub(crate) async fn connect_pcloud_token(
     hostname: String,
 ) -> Result<PCloudStatus, String> {
     blocking(&app, move |_, state| {
+        not_with_a_stand_in()?;
         let credentials = PCloudCredentials {
             access_token: access_token.trim().to_owned(),
             hostname,
@@ -167,6 +217,7 @@ pub(crate) async fn connect_pcloud_token(
 #[tauri::command]
 pub(crate) async fn disconnect_pcloud(app: AppHandle) -> Result<PCloudStatus, String> {
     blocking(&app, |_, state| {
+        not_with_a_stand_in()?;
         delete_access_token()?;
         state.library.set_setting("pcloud_email", "")?;
         state.library.set_setting("pcloud_oauth_state", "")?;
@@ -181,6 +232,7 @@ pub(crate) fn save_credentials(
     email: Option<&str>,
 ) -> BeverResult<()> {
     credentials.api_base()?;
+    not_with_a_stand_in()?;
     if credentials.access_token.trim().is_empty() {
         return Err(BeverError::Invalid(
             "pCloud returned an empty access token".into(),

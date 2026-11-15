@@ -317,6 +317,12 @@ pub struct SyncReport {
     /// Notes that could not be synchronized this time, with the reason.
     #[serde(default)]
     pub warnings: Vec<String>,
+    /// Requests that were made again because they did not complete.
+    #[serde(default)]
+    pub retries: u64,
+    /// Times the storage service said it was being asked too much.
+    #[serde(default)]
+    pub throttled: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -331,4 +337,7 @@ pub struct SyncProgress {
     pub remote_requests: u64,
     pub bytes_uploaded: u64,
     pub bytes_downloaded: u64,
+    /// Requests that were made again because they did not complete.
+    #[serde(default)]
+    pub retries: u64,
 }

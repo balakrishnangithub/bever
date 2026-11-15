@@ -15,6 +15,7 @@ import type {
   SavedNote,
   Settings,
   ShortcutTarget,
+  SyncRun,
   SyncStatus,
 } from '../types';
 import { chosenThumbnail } from '../types';
@@ -805,6 +806,189 @@ const nativeOnly = (feature: string) => () => {
   throw new Error(`${feature} is available in the native Bever app.`);
 };
 
+// A synchronization that only pretends, with `?demoSync`: forty notes go
+// "up", four a second, and nothing leaves the page. It is there so that
+// starting, stopping and the record of runs can be looked at in a browser.
+const demoSync = new URLSearchParams(window.location.search).has('demoSync');
+const demoSyncTotal = 40;
+const idleSync: SyncStatus = {
+  revision: 0,
+  runId: 0,
+  running: false,
+  stopping: false,
+  progress: {
+    phase: 'idle',
+    message: 'Synchronize when you are ready',
+    current: 0,
+    total: 0,
+    elapsedMs: 0,
+    networkMs: 0,
+    remoteRequests: 0,
+    bytesUploaded: 0,
+    bytesDownloaded: 0,
+    retries: 0,
+  },
+  lastReport: null,
+  error: null,
+  stopped: false,
+};
+let syncState: SyncStatus = structuredClone(idleSync);
+let syncTimer = 0;
+
+function pastRun(startedAgo: number, lasted: number, rest: Partial<SyncRun>): SyncRun {
+  const startedAt = Date.now() - startedAgo;
+  return {
+    startedAt,
+    activeAt: startedAt + lasted,
+    endedAt: startedAt + lasted,
+    outcome: 'complete',
+    message: null,
+    pushed: 0,
+    pulled: 0,
+    blobsUploaded: 0,
+    blobsDownloaded: 0,
+    bytesUploaded: 0,
+    bytesDownloaded: 0,
+    heldBack: 0,
+    retries: 0,
+    throttled: 0,
+    ...rest,
+  };
+}
+
+const hour = 3_600_000;
+const minute = 60_000;
+// One of each way a run can end.
+const syncRuns: SyncRun[] = demoSync
+  ? [
+      pastRun(3 * hour, 95 * minute, {
+        pushed: 4831,
+        blobsUploaded: 7785,
+        bytesUploaded: 6_700_000_000,
+        heldBack: 1,
+        retries: 3,
+        throttled: 1,
+      }),
+      pastRun(27 * hour, 17 * minute, {
+        outcome: 'failed',
+        message:
+          'network error: no connection to the storage service; this device may be offline (No such host is known. (os error 11001))',
+        pushed: 1216,
+        blobsUploaded: 2389,
+        bytesUploaded: 1_290_000_000,
+        retries: 5,
+      }),
+      pastRun(29 * hour, 12 * minute, {
+        outcome: 'running',
+        endedAt: null,
+        pushed: 310,
+        blobsUploaded: 498,
+        bytesUploaded: 436_000_000,
+      }),
+      pastRun(50 * hour, 42_000, { outcome: 'stopped', pushed: 12, bytesUploaded: 90_000 }),
+    ]
+  : [];
+
+function publishSync() {
+  syncState = { ...syncState, revision: syncState.revision + 1 };
+  window.dispatchEvent(new CustomEvent('bever:sync-status', { detail: structuredClone(syncState) }));
+}
+
+function endDemoSync(outcome: 'complete' | 'stopped') {
+  if (!syncState.running) return;
+  window.clearInterval(syncTimer);
+  const now = Date.now();
+  const { progress } = syncState;
+  const going = syncRuns[0];
+  if (going) {
+    syncRuns[0] = {
+      ...going,
+      activeAt: now,
+      endedAt: now,
+      outcome,
+      pushed: progress.current,
+      bytesUploaded: progress.bytesUploaded,
+    };
+  }
+  const complete = outcome === 'complete';
+  syncState = {
+    ...syncState,
+    running: false,
+    stopping: false,
+    stopped: !complete,
+    progress: complete ? { ...progress, phase: 'complete', message: 'Synchronization complete' } : progress,
+    lastReport: complete
+      ? {
+          pushed: progress.current,
+          pulled: 0,
+          conflicts: 0,
+          blobsUploaded: 0,
+          blobsDownloaded: 0,
+          syncedAt: now,
+          durationMs: progress.elapsedMs,
+          networkMs: 0,
+          remoteRequests: progress.remoteRequests,
+          bytesUploaded: progress.bytesUploaded,
+          bytesDownloaded: 0,
+          warnings: [],
+          retries: 0,
+          throttled: 0,
+        }
+      : null,
+  };
+  publishSync();
+}
+
+function startDemoSync(): SyncStatus {
+  if (!demoSync) return nativeOnly('pCloud synchronization')();
+  if (syncState.running) return structuredClone(syncState);
+  const started = Date.now();
+  syncRuns.unshift(pastRun(0, 0, { outcome: 'running', endedAt: null }));
+  syncState = {
+    ...structuredClone(idleSync),
+    revision: syncState.revision,
+    runId: syncState.runId + 1,
+    running: true,
+    progress: { ...idleSync.progress, phase: 'preparing', message: 'Preparing synchronization…' },
+  };
+  publishSync();
+  syncTimer = window.setInterval(() => {
+    const current = syncState.progress.current + 1;
+    syncState = {
+      ...syncState,
+      progress: {
+        ...syncState.progress,
+        phase: 'pushing',
+        message: syncState.stopping
+          ? syncState.progress.message
+          : `Uploading notes (${current} of ${demoSyncTotal}): Demo note ${current}`,
+        current,
+        total: demoSyncTotal,
+        elapsedMs: Date.now() - started,
+        remoteRequests: current + 2,
+        bytesUploaded: current * 250_000,
+      },
+    };
+    if (current >= demoSyncTotal) endDemoSync('complete');
+    else publishSync();
+  }, 250);
+  return structuredClone(syncState);
+}
+
+function stopDemoSync(): SyncStatus {
+  if (syncState.running && !syncState.stopping) {
+    syncState = {
+      ...syncState,
+      stopping: true,
+      progress: { ...syncState.progress, message: 'Stopping synchronization…' },
+    };
+    publishSync();
+    // A real run ends within moments of being stopped; so does this one.
+    window.setTimeout(() => endDemoSync('stopped'), 400);
+  }
+  return structuredClone(syncState);
+}
+
 export const browserApi: BeverApi = {
   bootstrap: demo(overview),
   listNotes: demo(listNotes),
@@ -1223,26 +1407,20 @@ export const browserApi: BeverApi = {
   }),
   ocrStatus: demo(() => ({ enabled: false, pending: 0, running: false })),
   finishClose: demo(() => undefined),
-  syncNow: demo((): SyncStatus => nativeOnly('pCloud synchronization')()),
-  syncStatus: demo((): SyncStatus => ({
-    revision: 0,
-    runId: 0,
-    running: false,
-    progress: {
-      phase: 'idle',
-      message: 'Synchronize when you are ready',
-      current: 0,
-      total: 0,
-      elapsedMs: 0,
-      networkMs: 0,
-      remoteRequests: 0,
-      bytesUploaded: 0,
-      bytesDownloaded: 0,
-    },
-    lastReport: null,
-    error: null,
-  })),
-  pcloudStatus: demo(() => ({ ...disconnected })),
+  syncNow: demo(startDemoSync),
+  syncStatus: demo((): SyncStatus => structuredClone(syncState)),
+  stopSync: demo(stopDemoSync),
+  syncHistory: demo((): SyncRun[] => structuredClone(syncRuns)),
+  pcloudStatus: demo((): PCloudStatus =>
+    demoSync
+      ? {
+          ...disconnected,
+          connected: true,
+          email: 'someone@example.com',
+          lastSyncAt: syncRuns[0]?.endedAt ?? null,
+        }
+      : { ...disconnected },
+  ),
   connectPcloud: demo((): PCloudStatus => nativeOnly('pCloud connection')()),
   cancelPcloudConnect: demo(() => ({ ...disconnected })),
   connectPcloudToken: demo((): PCloudStatus => nativeOnly('pCloud connection')()),

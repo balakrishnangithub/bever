@@ -22,6 +22,7 @@ import type {
   SettingKey,
   Settings,
   ShortcutTarget,
+  SyncRun,
   SyncStatus,
 } from '../types';
 import { browserApi } from './browserApi';
@@ -105,6 +106,10 @@ export interface BeverApi {
   finishClose: () => Promise<void>;
   syncNow: () => Promise<SyncStatus>;
   syncStatus: () => Promise<SyncStatus>;
+  /** Stops the run that is going; what it transferred stays. */
+  stopSync: () => Promise<SyncStatus>;
+  /** The latest runs, newest first. */
+  syncHistory: () => Promise<SyncRun[]>;
   pcloudStatus: () => Promise<PCloudStatus>;
   connectPcloud: () => Promise<PCloudStatus>;
   cancelPcloudConnect: () => Promise<PCloudStatus>;
@@ -201,6 +206,8 @@ const tauriApi: BeverApi = {
   finishClose: () => invoke('finish_close'),
   syncNow: () => invoke('sync_now'),
   syncStatus: () => invoke('sync_status'),
+  stopSync: () => invoke('stop_sync'),
+  syncHistory: () => invoke('sync_history'),
   pcloudStatus: () => invoke('pcloud_status'),
   connectPcloud: () => invoke('connect_pcloud'),
   cancelPcloudConnect: () => invoke('cancel_pcloud_connect'),

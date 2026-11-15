@@ -1,5 +1,57 @@
 # Changelog
 
+## 1.1.3 — 2026-11-15
+
+A first synchronization of 4,832 notes ended seventeen minutes in, on one file that Windows would not let be read, with nothing to say what had happened but "os error 225". Started again, it could not be stopped, and Bever could not be quit while it ran. A run now goes on past such a file and names it, can be stopped at any moment, and leaves a record of itself; and quitting quits.
+
+### What had happened
+
+Windows' own antivirus took one attachment for harmful as Bever read it to upload it, and withheld it: that is error 225. It was a judgement of the moment, from its online service: the same file was read and sent again later without objection. Bever treated the one unreadable file as the end of the run. Neither pCloud nor the computer going to sleep had a part in it: pCloud had taken 1.2 GB in those seventeen minutes at a steady pace, and took more as soon as the run was started again; and the run had gone on for eleven minutes after the screen turned off.
+
+### Fixed
+
+- **One file that cannot be read no longer ends a run.** Its note is held back, with any other note that has the same file, and everything else is synchronized. The run ends as complete and says which note and which attachment it held back, and why: the security software of the device withheld the file, the file is missing, or another program holds it. Nothing of a held-back note is sent, so no other device receives a note whose attachment it cannot get. The next run tries again.
+- **A run can be stopped.** While a run goes, Settings has **Stop** beside it. The run ends at once: a transfer under way is cut off at its next piece, a request that hangs on a dead connection is not waited for, and a pause between attempts ends. What was transferred stays, and the next run goes on from there.
+- **Quit quits.** With a run going, **Quit** in the tray hid the window and waited for the run to finish, which could be hours, and said nothing. It now reads **Stop synchronizing and quit**, stops the run and leaves; after three seconds Bever leaves whether the run has ended or not. Closing the window still keeps a run going in the tray, which now says that Bever is synchronizing.
+- **A failure says what it is.** An error of the system that has a plain meaning is given it: security software withheld a file, the disk is full, another program holds a file. A failed request says whether there was no connection (with the system's reason), no answer in time, or a connection that broke off, where it said "error sending request" before. pCloud asking for fewer requests, and pCloud failing inside, are told apart.
+- **A lost connection is waited out.** A request that does not complete is made again after 1, 3, 9, 27 and 60 seconds, a minute and a half in all, where it was given up after four seconds. A connection whose other end is gone is found out by probing it after 30 quiet seconds. Storing a download on a full disk is no longer taken for a lost connection and asked for again.
+
+### Added
+
+- **Recent runs.** The library keeps a record of its latest twenty runs: when each began and ended, how it ended and why, what it moved, how many notes it held back, and how many requests had to be made again. It is written as a run goes, so a run that never got to say how it ended is in it too, with the time it was last seen at work: Bever was closed, or the device slept or went off, under it. Settings shows the record, and opens it by itself when the latest run did not end well.
+- **How many requests were made again** is shown while a run goes and when it ends, and how many of them because the storage service asked for fewer. A service that limits a run is seen to do so.
+- **Windows is asked to stay awake while a run goes.** The screen turns off as usual. Windows grants this on mains power, and on battery for as long as its rules for standby allow.
+- `npm run test:sync` drives the built Windows application through a whole first synchronization against a stand-in for pCloud that the test runs on the same computer.
+
+### Changed
+
+- What is the same for every storage service is no longer part of the pCloud adapter. Making a request, stopping it, making it again, counting, and telling an unreadable file from a lost connection are in `sync/transport.rs`; `pcloud.rs` holds what is pCloud's. The shell chooses the storage in one place. `docs/sync.md` says what a further service would have to bring.
+
+### Compatibility
+
+- 1.1.3 works on the library of 1.0.0 and later as it is, and synchronizes with 1.1.0, 1.1.1 and 1.1.2: nothing changes in what is kept in pCloud. The record of runs is a setting of its own in the library, which earlier versions leave alone.
+- For those building on `bever-core`: `BeverError` has `Cancelled`, and its text for an error of the system begins with what the error means where that is known (`FileTrouble`); `SyncOptions` has `cancel` (`sync::Cancel`); `PCloudClient` has `stopped_by` and `stand_in`; `TransferMetrics`, `SyncReport` and `SyncProgress` count requests made again; `Library::sync_runs` gives the record (`sync::SyncRun`); `RemoteStore::upload_file` fails with `BeverError::Io` when it is the local file that cannot be read.
+
+### What was verified
+
+- Automated: 175 tests of the Rust core and 12 of its round trips through ENEX, 25 of the native shell, 166 of the interface, and the browser check, which now starts a run that only pretends, stops it, and reads the record of runs, on a desktop and at a phone's size. `cargo audit` and `npm audit` find no vulnerability.
+- New among the core's tests: an attachment that cannot be read holds back its note and the note that shares it, and nothing else, and both go once it can be read; a run stopped as its notes go up ends as stopped, and the next one sends the rest and nothing twice; a run stopped before it began asks nothing of the remote; every run leaves its record, whether it completed, failed with its reason, or never got to end; what Windows answers when its antivirus withholds a file (error 225) is said in words.
+- The transport, against a server on the same computer: an upload of 32 MB that the server does not take, and a download that stops arriving, each return within three seconds of being stopped; a pause between attempts ends when the run is stopped; a request that is turned away (HTTP 429, 503) is made again and counted, and one that is refused is not; a download cut short is asked for again; a file that fails while it is read is an error of the file and is not asked for again, and neither is a full disk.
+- The built Windows application was driven through a first synchronization of 120 notes with 86 MB of attachments against a stand-in for pCloud (`npm run test:sync`, 13 checks). Stop ended a run 0.13 seconds after it was clicked, with four transfers cut off and nothing arriving afterwards. A file held open by another program held back its one note while the other 119 were synchronized, and the note went with the next run. A run that was refused because the account was full said so. With the window closed during a run the application stayed, and stopping that run ended the application 0.1 seconds later. The record of runs was there after a restart. The application killed in the middle of a run left "Did not finish" in the record, and the next run finished what was left.
+- The same with the 171 notes and 390 attachments (134 MB) of a real export in the library too, among them the file that Windows had withheld on the night this began. This time Windows let it be read, and it was sent.
+- The request to stay awake reaches Windows: while it is held, Windows reports the system as required (`CallNtPowerInformation`).
+- The general check of the built application (`npm run test:native`) passes as before: 23 checks with an empty library, 27 with an imported one of 171 notes.
+- The Windows program and the Android package were built from the released source.
+
+### Not verified
+
+- **pCloud itself was not reached with this version.** No sign-in was saved on the development machine. The stand-in answers as pCloud answered 1.1.2 and as its documentation says. The requests are made as 1.1.2 made them; what changed is how they are waited for, stopped and made again.
+- **The antivirus could not be made to withhold the file again.** Windows read the same file without objection on every later attempt. What Bever does when a file is withheld was tested with a file held open by another program (error 32), and in the core's tests with the code Windows gave that night (225).
+- **Quit in the tray was not clicked by a test.** What it does, stopping the run and then leaving, was tested through the window's close button followed by stopping the run. The three seconds after which Bever leaves regardless were not exercised.
+- That Windows keeps a computer awake through a night was not waited for. The request is made and Windows knows of it; what it grants on battery is its own decision.
+- A connection lost in the middle of a run was not tried in the built application. The transport's tests cover a server that stops taking or sending, and a connection that breaks off.
+- Nothing in this release was run on an Android device; the Android package was built. Stop is in Settings there as well; the notification has no Stop of its own.
+
 ## 1.1.2 — 2026-11-15
 
 An import from the Evernote application gave some notes another title than Evernote shows, and left tasks out without saying so. Both are put right, in a library that was imported before as well: import again, and the notes that are there are corrected where they stand.

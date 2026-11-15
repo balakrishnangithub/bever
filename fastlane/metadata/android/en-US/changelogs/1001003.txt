@@ -1,0 +1,1 @@
+A synchronization goes on past a file that cannot be read and says which it was, can be stopped at any moment, and leaves a record of when and how it ended.

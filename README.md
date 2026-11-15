@@ -100,13 +100,14 @@ npm test                 # interface and editor unit tests
 npm run test:core        # Rust tests, including synchronization round trips
 npm run test:ui          # builds the interface and drives it in a browser
 npm run test:native      # drives the built Windows application (see below)
+npm run test:sync        # synchronizes it with a stand-in for pCloud on this computer
 npm run lint             # TypeScript and Rust lint
 npm run format:check     # formatting checks
 npm run build            # production interface
 npm run tauri -- build   # native desktop release and installers
 ```
 
-`npm run test:native` starts `target/release/bever.exe` with a temporary library, so it never touches the library of an installed Bever. Build the executable first with `npm run tauri -- build --no-bundle`.
+`npm run test:native` and `npm run test:sync` start `target/release/bever.exe` with a temporary library, so they never touch the library of an installed Bever, its pCloud sign-in, or pCloud. Build the executable first with `npm run tauri -- build --no-bundle`; the second also needs `cargo build --release -p bever-core --example import_enex`.
 
 ### Android
 

@@ -7,7 +7,8 @@ use std::{
     thread,
 };
 
-use crate::error::Result;
+use super::Cancel;
+use crate::error::{BeverError, Result};
 
 /// Simultaneous transfers. A handful of connections removes most of the
 /// per-request latency without straining the storage service or a phone.
@@ -19,10 +20,12 @@ pub(crate) const WORKERS: usize = 4;
 /// order, so it may use state that is not shareable between threads (the
 /// database, the progress callback). After the first failure no further items
 /// are started; transfers already in flight finish, their results are
-/// discarded, and the first error is returned.
+/// discarded, and the first error is returned. The same happens when the run
+/// is stopped, and what is returned is that it was.
 pub(crate) fn for_each_parallel<T, R>(
     items: Vec<T>,
     workers: usize,
+    cancel: &Cancel,
     work: impl Fn(&T) -> Result<R> + Sync,
     mut on_done: impl FnMut(T, R) -> Result<()>,
 ) -> Result<()>
@@ -43,7 +46,7 @@ where
             let sender = sender.clone();
             let (queue, stop, work) = (&queue, &stop, &work);
             scope.spawn(move || loop {
-                if stop.load(Ordering::Relaxed) {
+                if stop.load(Ordering::Relaxed) || cancel.is_cancelled() {
                     break;
                 }
                 let next = queue.lock().expect("transfer queue poisoned").next();
@@ -67,6 +70,9 @@ where
             }
         }
     });
+    if cancel.is_cancelled() {
+        return Err(BeverError::Cancelled);
+    }
     first_error.map_or(Ok(()), Err)
 }
 
@@ -75,7 +81,6 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     use super::*;
-    use crate::error::BeverError;
 
     #[test]
     fn every_item_is_processed_once_and_finished_on_the_calling_thread() {
@@ -84,6 +89,7 @@ mod tests {
         for_each_parallel(
             (0..50).collect::<Vec<u32>>(),
             WORKERS,
+            &Cancel::new(),
             |item| Ok(item * 2),
             |item, doubled| {
                 assert_eq!(thread::current().id(), caller);
@@ -105,6 +111,7 @@ mod tests {
         let result = for_each_parallel(
             (0..200).collect::<Vec<u32>>(),
             2,
+            &Cancel::new(),
             |item| {
                 started.fetch_add(1, Ordering::SeqCst);
                 // Like a real transfer, each item takes a moment, so the
@@ -131,10 +138,41 @@ mod tests {
         let result = for_each_parallel(
             vec![1, 2, 3],
             2,
+            &Cancel::new(),
             |_| Ok(()),
             |_, ()| Err(BeverError::Invalid("cannot record".into())),
         );
         assert!(matches!(result, Err(BeverError::Invalid(_))));
-        assert!(for_each_parallel(Vec::<u8>::new(), 4, |_| Ok(()), |_, ()| Ok(())).is_ok());
+        let none = Vec::<u8>::new();
+        assert!(for_each_parallel(none, 4, &Cancel::new(), |_| Ok(()), |_, ()| Ok(())).is_ok());
+    }
+
+    #[test]
+    fn stopping_starts_no_further_work_and_is_what_is_returned() {
+        let cancel = Cancel::new();
+        let started = AtomicUsize::new(0);
+        let result = for_each_parallel(
+            (0..200).collect::<Vec<u32>>(),
+            2,
+            &cancel,
+            |item| {
+                started.fetch_add(1, Ordering::SeqCst);
+                thread::sleep(std::time::Duration::from_millis(5));
+                if *item == 3 {
+                    cancel.cancel();
+                }
+                Ok(())
+            },
+            |_, ()| Ok(()),
+        );
+        assert!(matches!(result, Err(BeverError::Cancelled)));
+        let started = started.load(Ordering::SeqCst);
+        assert!(
+            started < 100,
+            "{started} transfers were started after stopping"
+        );
+        // Work that had not begun when the run was stopped is not begun.
+        let late = for_each_parallel(vec![1], 1, &cancel, |_| Ok(()), |_, ()| Ok(()));
+        assert!(matches!(late, Err(BeverError::Cancelled)));
     }
 }

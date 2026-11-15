@@ -30,7 +30,8 @@ pub(crate) async fn erase_local_data(app: AppHandle) -> Result<(), String> {
     blocking(&app, |app, state| {
         if state.sync.is_running() {
             return Err(BeverError::Invalid(
-                "Synchronization is running. Wait until it has finished, then try again.".into(),
+                "Synchronization is running. Stop it, or wait until it has finished, then try again."
+                    .into(),
             ));
         }
         if state.imports.is_running() {
