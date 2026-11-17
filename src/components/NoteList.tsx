@@ -22,6 +22,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { isNative, thumbnailUrl } from '../lib/api';
 import { dialogs } from '../lib/dialogs';
 import { snippetParts } from '../lib/snippet';
+import { useBackCloses } from '../lib/useBackCloses';
 import { useLibraryStore } from '../store/useLibraryStore';
 import type { NoteOrganizationAction, NoteSummary } from '../types';
 import { FilterPanel } from './FilterPanel';
@@ -150,6 +151,8 @@ export function NoteList({
     setOrganizationMessage(null);
   };
   const clearSelection = () => setCheckedIds(new Set());
+  // Going back leaves the selection of notes, as it leaves a dialog.
+  useBackCloses(selectedNoteIds.length > 0, clearSelection);
   const noun = (count: number) => (count === 1 ? 'note' : 'notes');
 
   const deleteSelected = async () => {

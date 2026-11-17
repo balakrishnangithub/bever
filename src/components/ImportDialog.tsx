@@ -2,6 +2,7 @@ import { AlertTriangle, Check, FileInput, HardDrive, X } from 'lucide-react';
 import { useId } from 'react';
 
 import { importPercent } from '../lib/importProgress';
+import { useBackCloses } from '../lib/useBackCloses';
 import { formatBytes } from '../lib/syncProgress';
 import { useImportStore } from '../store/useImportStore';
 import { useLibraryStore } from '../store/useLibraryStore';
@@ -44,6 +45,9 @@ export function ImportDialog() {
   const notebooks = useLibraryStore((state) => state.overview.notebooks);
   const ocrEnabled = useLibraryStore((state) => state.settings.ocrEnabled);
   const notebookListId = useId();
+  // Going back does what the cross does: an import that is running goes on
+  // out of sight, and anything else is put away.
+  useBackCloses(open && phase !== 'idle', phase === 'running' ? hide : dismiss);
   if (!open || phase === 'idle') return null;
 
   const close = phase === 'running' ? hide : dismiss;

@@ -40,6 +40,9 @@ describe('layers of the phone layout', () => {
         }),
       ),
     );
+    // Someone has touched the page: entries of the history are made for
+    // what is opened in answer to a touch, and not otherwise.
+    window.dispatchEvent(new Event('pointerup'));
   });
   afterEach(() => {
     act(() => root.unmount());

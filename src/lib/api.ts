@@ -36,6 +36,12 @@ import { demoResourceUrl } from './demoResources';
 export interface BeverApi {
   bootstrap: () => Promise<Overview>;
   listNotes: (filter: NoteFilter) => Promise<NotePage>;
+  /**
+   * How many notes of the listing `filter` gives have each tag, by the
+   * tag's id: of the whole listing, not of a page of it. A tag that none
+   * of them has is left out.
+   */
+  listingTags: (filter: NoteFilter) => Promise<Record<string, number>>;
   getNote: (id: string) => Promise<Note>;
   createNote: (notebookId: string | null) => Promise<Note>;
   saveNote: (input: SaveNote) => Promise<SavedNote>;
@@ -150,6 +156,7 @@ function blobToBase64(blob: Blob): Promise<string> {
 const tauriApi: BeverApi = {
   bootstrap: () => invoke('bootstrap'),
   listNotes: (filter) => invoke('list_notes', { filter }),
+  listingTags: (filter) => invoke('listing_tags', { filter }),
   getNote: (id) => invoke('get_note', { id }),
   createNote: (notebookId) => invoke('create_note', { notebookId }),
   saveNote: (input) => invoke('save_note', { input }),

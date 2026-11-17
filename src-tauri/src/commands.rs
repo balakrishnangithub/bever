@@ -3,6 +3,8 @@
 //! Every command runs on a blocking worker thread. A command declared as a
 //! plain function would run on the UI thread and freeze the window while it
 //! waits for the database.
+use std::collections::HashMap;
+
 use bever_core::{
     error::{BeverError, Result as BeverResult},
     models::{
@@ -40,6 +42,15 @@ pub(crate) async fn bootstrap(app: AppHandle) -> Result<Overview, String> {
 #[tauri::command]
 pub(crate) async fn list_notes(app: AppHandle, filter: NoteFilter) -> Result<NotePage, String> {
     blocking(&app, move |_, state| state.library.list_notes(&filter)).await
+}
+
+/// How many notes of a listing have each tag, for choosing among them.
+#[tauri::command]
+pub(crate) async fn listing_tags(
+    app: AppHandle,
+    filter: NoteFilter,
+) -> Result<HashMap<String, u64>, String> {
+    blocking(&app, move |_, state| state.library.listing_tags(&filter)).await
 }
 
 #[tauri::command]

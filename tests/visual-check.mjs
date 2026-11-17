@@ -131,12 +131,39 @@ try {
   await tagDialog.getByRole('button', { name: 'Add tags', exact: true }).click();
   await expect(page.locator('.organization-status')).toContainText('Tags added to 2 notes.');
   await page.getByRole('button', { name: /Filters/ }).click();
+  const tagRows = page.locator('.filter-tags-list .checkbox-label');
+  // The tags offered are those of the notes listed, each with how many of
+  // the notes have it.
+  await expect(tagRows.filter({ hasText: 'bulk-test' }).locator('small')).toHaveText('2');
   await page.getByLabel('bulk-test', { exact: true }).check();
+  await expect(page.locator('.note-card')).toHaveCount(2);
+  // With a tag chosen, what is offered is what its two notes also have:
+  // not "testing", which only the note made above has.
+  await expect(page.getByLabel('bulk-test', { exact: true })).toBeChecked();
+  await expect(tagRows.first()).toContainText('bulk-test');
+  await expect(page.getByLabel('second-tag', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('testing', { exact: true })).toHaveCount(0);
+  // A tag is found by typing some of its name; one that none of the listed
+  // notes has is said to be elsewhere, and is there when all are asked for.
+  await page.getByLabel('Find a tag').fill('SECOND');
+  await expect(tagRows).toHaveCount(2);
+  await page.getByLabel('Find a tag').fill('test');
+  await expect(page.locator('.filter-tags-note')).toContainText(
+    'No tag of these notes has “test” in its name. 1 other tag does.',
+  );
+  await page.getByRole('button', { name: /^Show all \d+ tags$/ }).click();
+  await expect(page.getByLabel('testing', { exact: true })).toBeVisible();
+  await expect(tagRows.filter({ hasText: 'testing' })).toHaveClass(/elsewhere/);
+  await page.getByRole('button', { name: 'Show only the tags of these notes' }).click();
+  await page.getByLabel('Find a tag').fill('second');
   await page.getByLabel('second-tag', { exact: true }).check();
+  // Choosing the tag that was looked for ends the looking.
+  await expect(page.getByLabel('Find a tag')).toHaveValue('');
   await expect(page.locator('.note-card')).toHaveCount(2);
   await expect(page.getByRole('button', { name: /Filters/ })).toContainText('2');
   await page.screenshot({ path: 'test-results/bever-tag-filters.png', fullPage: true });
   await page.getByRole('button', { name: 'Clear filters', exact: true }).click();
+  await expect(page.getByLabel('testing', { exact: true })).toBeVisible();
   await page.getByLabel('Close filters').click();
   await expect(page.locator('.note-card')).toHaveCount(4);
 
@@ -171,13 +198,21 @@ try {
   await page.locator('.note-card').getByText('Local attachment preview', { exact: true }).click();
   await page.getByRole('button', { name: 'Preview PDF', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Preview Bever preview.pdf' })).toBeVisible();
-  await expect(page.locator('.pdf-canvas-wrap canvas')).toBeVisible();
-  await expect(page.locator('.pdf-controls')).toContainText('1 / 2', { timeout: 30000 });
-  await expect(page.locator('.pdf-canvas-wrap canvas')).toHaveAttribute('data-rendered-page', '1');
-  await page.getByLabel('Next PDF page').click();
-  await expect(page.locator('.pdf-controls')).toContainText('2 / 2', { timeout: 30000 });
-  await expect(page.locator('.pdf-canvas-wrap canvas')).toHaveAttribute('data-rendered-page', '2');
+  // Its pages are one under another, and it lies over the window, not in the note.
+  await expect(page.locator('.pdf-sheet')).toHaveCount(2, { timeout: 30000 });
+  await expect(page.locator('.pdf-sheet[data-page="1"] canvas.pdf-whole')).toBeVisible({ timeout: 30000 });
+  await expect(page.locator('.pdf-sheet[data-page="2"] canvas.pdf-whole')).toBeAttached({ timeout: 30000 });
+  await expect(page.locator('.pdf-controls')).toContainText('/ 2');
+  await expect(page.getByLabel('PDF page', { exact: true })).toHaveValue('1');
   await expect(page.getByLabel('Loading PDF')).toHaveCount(0);
+  expect(
+    await page.locator('.pdf-backdrop').evaluate((element) => element.parentElement === document.body),
+  ).toBe(true);
+  await page.getByLabel('Next PDF page').click();
+  await expect(page.getByLabel('PDF page', { exact: true })).toHaveValue('2');
+  await page.getByLabel('PDF page', { exact: true }).fill('1');
+  await page.getByLabel('PDF page', { exact: true }).press('Enter');
+  await expect(page.getByLabel('PDF page', { exact: true })).toHaveValue('1');
   await page.screenshot({ path: 'test-results/bever-pdf-preview.png', fullPage: true });
   await page.getByLabel('Close PDF preview').click();
   await page.locator('.attachment-file').click({ button: 'right' });
@@ -2520,11 +2555,604 @@ try {
     await ways.close();
   }
 
+  // Hundreds of tags, on a phone: the filter is one list that a finger
+  // moves, with a place to type a tag's name that stays in reach.
+  {
+    const context = await browser.newContext({
+      viewport: { width: 412, height: 915 },
+      deviceScaleFactor: 2,
+      hasTouch: true,
+      isMobile: true,
+    });
+    const tagged = await context.newPage();
+    tagged.on('pageerror', (error) => errors.push(error.message));
+    tagged.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    const fingers = await context.newCDPSession(tagged);
+    /** A finger that goes `first` in four small steps and then straight up or down. */
+    const swipe = async (first, then) => {
+      let x = 220;
+      let y = 600;
+      await fingers.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+      const steps = [
+        ...Array.from({ length: 4 }, () => [first[0] / 4, first[1] / 4]),
+        ...Array.from({ length: 12 }, () => [0, then]),
+      ];
+      for (const [dx, dy] of steps) {
+        x += dx;
+        y += dy;
+        await fingers.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y }] });
+        await tagged.waitForTimeout(16);
+      }
+      await tagged.waitForTimeout(80);
+      await fingers.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await tagged.waitForTimeout(700);
+    };
+    await tagged.goto('http://127.0.0.1:7100/?demoTags=600', { waitUntil: 'domcontentloaded' });
+    await tagged.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+    await tagged.getByRole('button', { name: /Filters/ }).click();
+    const rows = tagged.locator('.filter-tags-list .checkbox-label');
+    await expect(rows.first()).toBeVisible();
+    // Every tag a note has is offered; "Zulu time", which no note has, is not.
+    expect(await rows.count()).toBeGreaterThan(600);
+    await expect(tagged.getByLabel('Zulu time', { exact: true })).toHaveCount(0);
+    const body = tagged.locator('.filter-body');
+    const scrolled = () => body.evaluate((element) => element.scrollTop);
+    // One thing scrolls, the panel: the list of tags does not scroll in it.
+    expect(
+      await tagged
+        .locator('.filter-tags-list')
+        .evaluate((element) => element.scrollHeight - element.clientHeight),
+    ).toBe(0);
+    expect(await body.evaluate((element) => element.scrollWidth - element.clientWidth)).toBe(0);
+    // A swipe moves it, also one that begins more sideways than upward, as
+    // a thumb's does: a list that only takes swipes up and down ignores
+    // the whole of such a swipe.
+    let from = await scrolled();
+    await swipe([0, -20], -15);
+    expect((await scrolled()) - from).toBeGreaterThan(120);
+    from = await scrolled();
+    await swipe([-15, -13], -15);
+    expect((await scrolled()) - from).toBeGreaterThan(120);
+    from = await scrolled();
+    await swipe([-17, -10], -15);
+    expect((await scrolled()) - from).toBeGreaterThan(90);
+    from = await scrolled();
+    await swipe([15, 13], 15);
+    expect((await scrolled()) - from).toBeLessThan(-120);
+    // And it moved up and down only: no name of a tag, however long, makes
+    // the panel wider than its place.
+    expect(await body.evaluate((element) => element.scrollLeft)).toBe(0);
+    await expect(rows.first()).toContainText('A tag whose name is longer');
+    expect((await rows.first().boundingBox()).width).toBeLessThanOrEqual((await body.boundingBox()).width);
+    // Far down the list, the place to type in is still at the top of it.
+    await body.evaluate((element) => (element.scrollTop = element.scrollHeight));
+    const find = tagged.getByLabel('Find a tag');
+    await expect(find).toBeInViewport();
+    const panelTop = (await tagged.locator('.filter-panel').boundingBox()).y;
+    expect((await find.boundingBox()).y - panelTop).toBeLessThan(120);
+    // A tag that begins with z, without scrolling to the end for it.
+    await find.fill('z');
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first()).toContainText('zebra crossing');
+    await expect(tagged.locator('.filter-tags-note')).toContainText('1 more tag with “z” in its name');
+    await tagged.screenshot({ path: 'test-results/bever-phone-tag-find.png' });
+    await tagged.getByLabel('zebra crossing', { exact: true }).tap();
+    await expect(tagged.locator('.notes-header h1 span')).toHaveText('1');
+    await expect(find).toHaveValue('');
+    // What is left to choose is what that one note also has.
+    await expect(rows).toHaveCount(4);
+    await expect(rows.first()).toContainText('zebra crossing');
+    await expect(tagged.getByLabel('zebra crossing', { exact: true })).toBeChecked();
+    await tagged.screenshot({ path: 'test-results/bever-phone-tag-chosen.png' });
+    await tagged.getByRole('button', { name: /^Show all \d+ tags$/ }).tap();
+    await expect(tagged.getByLabel('Zulu time', { exact: true })).toBeAttached();
+    await tagged.getByRole('button', { name: 'Clear filters', exact: true }).tap();
+    await expect(tagged.getByLabel('zebra crossing', { exact: true })).not.toBeChecked();
+    await context.close();
+  }
+
+  // A PDF of forty pages: scrolled through, made larger about the place
+  // looked at, and drawn again at the size it is shown.
+  {
+    const pdf = pdfOfPages(40);
+    const serve = (target) =>
+      target.route('**/demo-attachments/demo-pdf', (route) =>
+        route.fulfill({ body: pdf, contentType: 'application/pdf' }),
+      );
+    const open = async (target, press) => {
+      await target.goto('http://127.0.0.1:7100', { waitUntil: 'domcontentloaded' });
+      await target.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+      await target.getByLabel('Search notes').fill('Local attachment preview');
+      await press(target.locator('.note-card').getByText('Local attachment preview', { exact: true }));
+      await press(target.getByRole('button', { name: 'Preview PDF', exact: true }));
+      await expect(target.locator('.pdf-sheet[data-page="1"] canvas.pdf-whole')).toBeVisible({
+        timeout: 30000,
+      });
+    };
+    /** What is drawn, and how large. */
+    const drawn = (target) =>
+      target.evaluate(() => ({
+        sheets: document.querySelectorAll('.pdf-sheet').length,
+        widths: new Set(
+          [...document.querySelectorAll('.pdf-sheet')].map((sheet) => Math.round(sheet.clientWidth)),
+        ).size,
+        wholes: [...document.querySelectorAll('.pdf-whole')].map((canvas) => ({
+          page: Number(canvas.parentElement.dataset.page),
+          pixels: canvas.width * canvas.height,
+          scale: Number(canvas.parentElement.dataset.drawn),
+        })),
+        parts: [...document.querySelectorAll('.pdf-part')].map((canvas) => ({
+          page: Number(canvas.parentElement.dataset.page),
+          pixels: canvas.width * canvas.height,
+        })),
+        noteZoomed: document.querySelector('.note-zoom')?.classList.contains('zoomed') ?? false,
+      }));
+    const sheetBox = (target, number) => target.locator(`.pdf-sheet[data-page="${number}"]`).boundingBox();
+
+    const desk = await browser.newPage({ viewport: { width: 1440, height: 920 }, deviceScaleFactor: 1 });
+    desk.on('pageerror', (error) => errors.push(error.message));
+    desk.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    await serve(desk);
+    await open(desk, (locator) => locator.click());
+    let state = await drawn(desk);
+    expect(state.sheets).toBe(40);
+    // Upright pages and pages on their side are all as wide as the view.
+    expect(state.widths).toBe(1);
+    // Only what is in view and near it is drawn.
+    expect(state.wholes.length).toBeLessThanOrEqual(4);
+    const view = await desk.locator('.pdf-scroll').boundingBox();
+    await desk.mouse.move(view.x + view.width / 2, view.y + view.height / 2);
+    for (let turn = 0; turn < 12; turn += 1) {
+      await desk.mouse.wheel(0, 900);
+      await desk.waitForTimeout(50);
+    }
+    await expect(desk.getByLabel('PDF page', { exact: true })).not.toHaveValue('1');
+    await desk.getByLabel('PDF page', { exact: true }).fill('31');
+    await desk.getByLabel('PDF page', { exact: true }).press('Enter');
+    await expect(desk.locator('.pdf-sheet[data-page="31"] canvas.pdf-whole')).toBeVisible({ timeout: 30000 });
+    await expect(desk.getByLabel('PDF page', { exact: true })).toHaveValue('31');
+    await desk.waitForTimeout(400);
+    state = await drawn(desk);
+    // The pages passed on the way gave their drawings back.
+    expect(state.wholes.length).toBeLessThanOrEqual(5);
+    expect(state.wholes.every((whole) => whole.page >= 28)).toBe(true);
+    const fitted = state.wholes.find((whole) => whole.page === 31).scale;
+
+    // Ctrl and the wheel: larger, about the pointer.
+    const before = await sheetBox(desk, 31);
+    const pointer = { x: before.x + before.width * 0.3, y: before.y + before.height * 0.3 };
+    await desk.mouse.move(pointer.x, pointer.y);
+    await desk.keyboard.down('Control');
+    for (let turn = 0; turn < 4; turn += 1) {
+      await desk.mouse.wheel(0, -120);
+      await desk.waitForTimeout(30);
+    }
+    await desk.keyboard.up('Control');
+    const after = await sheetBox(desk, 31);
+    expect(after.width / before.width).toBeGreaterThan(3);
+    expect(Math.abs(after.x + after.width * 0.3 - pointer.x)).toBeLessThan(6);
+    expect(Math.abs(after.y + after.height * 0.3 - pointer.y)).toBeLessThan(6);
+    // Once it rests, the page is drawn again, finer; and where the whole
+    // page would be more than a drawing may have, the part in view is
+    // drawn over it at the size it is shown.
+    await expect(desk.locator('.pdf-sheet[data-page="31"] canvas.pdf-part')).toBeAttached({ timeout: 15000 });
+    state = await drawn(desk);
+    expect(state.wholes.find((whole) => whole.page === 31).scale).toBeGreaterThan(fitted * 1.5);
+    expect(state.wholes.every((whole) => whole.pixels <= 9_100_000)).toBe(true);
+    expect(state.parts.every((part) => part.pixels <= 8_100_000)).toBe(true);
+    await desk.screenshot({ path: 'test-results/bever-pdf-zoomed.png', fullPage: true });
+    // The mouse takes the page and moves it.
+    const place = () =>
+      desk.locator('.pdf-scroll').evaluate((element) => [element.scrollLeft, element.scrollTop]);
+    const held = await place();
+    await desk.mouse.move(view.x + 400, view.y + 400);
+    await desk.mouse.down();
+    await desk.mouse.move(view.x + 300, view.y + 250, { steps: 6 });
+    await desk.mouse.up();
+    const moved = await place();
+    expect(moved[0] - held[0]).toBeGreaterThan(90);
+    expect(moved[1] - held[1]).toBeGreaterThan(140);
+    // The note it was opened from is as it was.
+    expect((await drawn(desk)).noteZoomed).toBe(false);
+    await desk.getByRole('button', { name: /Fit the width/ }).click();
+    await expect(desk.locator('.pdf-zoom-level')).toHaveText('100%');
+    expect(Math.abs((await sheetBox(desk, 31)).width - before.width)).toBeLessThan(1);
+    await desk.keyboard.press('Escape');
+    await expect(desk.locator('.pdf-backdrop')).toHaveCount(0);
+    await desk.close();
+
+    const context = await browser.newContext({
+      viewport: { width: 412, height: 915 },
+      deviceScaleFactor: 2,
+      hasTouch: true,
+      isMobile: true,
+    });
+    const handheld = await context.newPage();
+    handheld.on('pageerror', (error) => errors.push(error.message));
+    handheld.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    const fingers = await context.newCDPSession(handheld);
+    await serve(handheld);
+    await open(handheld, (locator) => locator.tap());
+    // On a phone the document has the whole screen.
+    const modal = await handheld.locator('.pdf-modal').boundingBox();
+    expect(modal.width).toBe(412);
+    expect(modal.height).toBe(915);
+    await handheld.waitForTimeout(300);
+    // Two fingers spread about a point: what was between them stays there.
+    const first = await sheetBox(handheld, 1);
+    const centre = { x: 280, y: 420 };
+    const share = { x: (centre.x - first.x) / first.width, y: (centre.y - first.y) / first.height };
+    const two = (spread) => [
+      { x: centre.x - spread, y: centre.y - spread * 0.4, id: 1 },
+      { x: centre.x + spread, y: centre.y + spread * 0.4, id: 2 },
+    ];
+    await fingers.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: two(40) });
+    for (let step = 1; step <= 20; step += 1) {
+      await fingers.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: two(40 + step * 4) });
+      await handheld.waitForTimeout(16);
+    }
+    await handheld.waitForTimeout(60);
+    await fingers.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    const spread = await sheetBox(handheld, 1);
+    expect(spread.width / first.width).toBeCloseTo(3, 1);
+    expect(Math.abs(spread.x + share.x * spread.width - centre.x)).toBeLessThan(3);
+    expect(Math.abs(spread.y + share.y * spread.height - centre.y)).toBeLessThan(3);
+    // The preview is what became larger, and not the note under it.
+    expect((await drawn(handheld)).noteZoomed).toBe(false);
+    await expect(handheld.locator('.pdf-sheet[data-page="1"] canvas.pdf-part')).toBeAttached({
+      timeout: 15000,
+    });
+    // A phone is not asked for more memory than a page may take there.
+    expect((await drawn(handheld)).wholes.every((whole) => whole.pixels <= 4_100_000)).toBe(true);
+    await handheld.screenshot({ path: 'test-results/bever-phone-pdf-zoomed.png' });
+    // One finger moves the larger page, sideways too.
+    const beforePan = await handheld.locator('.pdf-scroll').evaluate((element) => element.scrollLeft);
+    await fingers.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 300, y: 500 }] });
+    for (let step = 1; step <= 6; step += 1) {
+      await fingers.send('Input.dispatchTouchEvent', {
+        type: 'touchMove',
+        touchPoints: [{ x: 300 - step * 30, y: 500 }],
+      });
+      await handheld.waitForTimeout(16);
+    }
+    await fingers.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await handheld.waitForTimeout(600);
+    expect(
+      (await handheld.locator('.pdf-scroll').evaluate((element) => element.scrollLeft)) - beforePan,
+    ).toBeGreaterThan(100);
+    // A double tap goes back to the width of the screen, and another closer.
+    const tapTwice = async () => {
+      for (let tap = 0; tap < 2; tap += 1) {
+        await fingers.send('Input.dispatchTouchEvent', {
+          type: 'touchStart',
+          touchPoints: [{ x: 200, y: 400 }],
+        });
+        await handheld.waitForTimeout(40);
+        await fingers.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        await handheld.waitForTimeout(90);
+      }
+    };
+    await tapTwice();
+    await expect.poll(async () => (await sheetBox(handheld, 1)).width).toBeCloseTo(first.width, 0);
+    await handheld.waitForTimeout(400);
+    await tapTwice();
+    await expect.poll(async () => (await sheetBox(handheld, 1)).width / first.width).toBeCloseTo(2.5, 1);
+    await handheld.getByLabel('Close PDF preview').tap();
+    await expect(handheld.locator('.pdf-backdrop')).toHaveCount(0);
+    await context.close();
+  }
+
+  // Going back, on a phone: whatever was opened last is what closes, and
+  // nothing is passed by. Back is a step back in the window's history,
+  // which is what Android's button makes of it.
+  {
+    const context = await browser.newContext({
+      viewport: { width: 412, height: 915 },
+      deviceScaleFactor: 2,
+      hasTouch: true,
+      isMobile: true,
+    });
+    const walk = await context.newPage();
+    walk.on('pageerror', (error) => errors.push(error.message));
+    walk.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    await walk.goto('http://127.0.0.1:7100/?demoAnnotated', { waitUntil: 'domcontentloaded' });
+    await walk.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+    const goBack = () => walk.evaluate(() => window.history.back());
+    /** How many things the history says are open. */
+    const open = () => walk.evaluate(() => window.history.state?.depth ?? 0);
+    const shellOf = walk.locator('.app-shell');
+    const drawerOf = walk.locator('.sidebar');
+
+    // The filter.
+    await walk.getByRole('button', { name: /Filters/ }).tap();
+    await expect(walk.locator('.filter-panel')).toBeVisible();
+    expect(await open()).toBe(1);
+    await goBack();
+    await expect(walk.locator('.filter-panel')).toHaveCount(0);
+    await expect.poll(open).toBe(0);
+
+    // A selection of notes, and a dialog opened from it: the dialog first.
+    await walk.getByLabel('Select Welcome to Bever', { exact: true }).check();
+    await expect(walk.locator('.bulk-toolbar')).toBeVisible();
+    await walk.locator('.bulk-toolbar').getByRole('button', { name: 'Tag', exact: true }).tap();
+    await expect(walk.getByRole('dialog', { name: 'Add tags', exact: true })).toBeVisible();
+    await goBack();
+    await expect(walk.getByRole('dialog', { name: 'Add tags', exact: true })).toHaveCount(0);
+    await expect(walk.locator('.bulk-toolbar')).toBeVisible();
+    await goBack();
+    await expect(walk.locator('.bulk-toolbar')).toHaveCount(0);
+    await expect.poll(open).toBe(0);
+
+    // The drawer, a menu in it, and a question asked from the menu.
+    await walk.getByRole('button', { name: 'Open navigation' }).tap();
+    await expect(drawerOf).toHaveClass(/is-open/);
+    await expect.poll(async () => (await drawerOf.boundingBox()).x).toBeGreaterThanOrEqual(0);
+    await walk.getByLabel('Actions for Reading', { exact: true }).tap();
+    await expect(walk.locator('.context-menu')).toBeVisible();
+    await goBack();
+    await expect(walk.locator('.context-menu')).toHaveCount(0);
+    await expect(drawerOf).toHaveClass(/is-open/);
+    await walk.getByLabel('Actions for Reading', { exact: true }).tap();
+    await walk.getByRole('menuitem', { name: 'Rename…' }).tap();
+    await expect(walk.getByRole('dialog', { name: 'Rename notebook' })).toBeVisible();
+    await goBack();
+    await expect(walk.getByRole('dialog', { name: 'Rename notebook' })).toHaveCount(0);
+    await expect(drawerOf).toHaveClass(/is-open/);
+    await goBack();
+    await expect(drawerOf).not.toHaveClass(/is-open/);
+    await expect.poll(open).toBe(0);
+
+    // The settings, opened from the drawer, and the screen of all tags.
+    await walk.getByRole('button', { name: 'Open navigation' }).tap();
+    await expect.poll(async () => (await drawerOf.boundingBox()).x).toBeGreaterThanOrEqual(0);
+    await walk.getByRole('button', { name: 'Settings & sync' }).tap();
+    await expect(walk.getByRole('dialog', { name: 'Settings' })).toBeVisible();
+    await goBack();
+    await expect(walk.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
+    await expect(drawerOf).not.toHaveClass(/is-open/);
+    await expect.poll(open).toBe(0);
+    await walk.getByRole('button', { name: 'Open navigation' }).tap();
+    await expect.poll(async () => (await drawerOf.boundingBox()).x).toBeGreaterThanOrEqual(0);
+    await drawerOf.getByRole('button', { name: 'Tags', exact: true }).tap();
+    await expect(walk.getByRole('region', { name: 'Tags', exact: true })).toBeVisible();
+    await goBack();
+    await expect(walk.getByRole('region', { name: 'Tags', exact: true })).toHaveCount(0);
+    await expect.poll(open).toBe(0);
+
+    // A note, and what opens over it: each closes by itself, the note stays.
+    await walk.getByLabel('Search notes').fill('Local attachment preview');
+    await walk.locator('.note-card').getByText('Local attachment preview', { exact: true }).tap();
+    await expect(shellOf).toHaveClass(/mobile-has-note/);
+    await walk.getByRole('button', { name: 'Preview PDF', exact: true }).tap();
+    await expect(walk.getByRole('dialog', { name: 'Preview Bever preview.pdf' })).toBeVisible();
+    await goBack();
+    await expect(walk.locator('.pdf-backdrop')).toHaveCount(0);
+    await expect(shellOf).toHaveClass(/mobile-has-note/);
+    await walk.getByLabel('Actions for Bever preview.pdf').tap();
+    await expect(walk.locator('.context-menu')).toBeVisible();
+    await goBack();
+    await expect(walk.locator('.context-menu')).toHaveCount(0);
+    await walk.getByLabel('Note information').tap();
+    await expect(walk.locator('.metadata-panel')).toBeVisible();
+    await goBack();
+    await expect(walk.locator('.metadata-panel')).toHaveCount(0);
+    await walk.getByLabel('Find in this note').tap();
+    await expect(walk.locator('.note-find')).toBeVisible();
+    await goBack();
+    await expect(walk.locator('.note-find')).toHaveCount(0);
+    await expect(shellOf).toHaveClass(/mobile-has-note/);
+    // The preview open, and Back twice: the preview, then the note. It is
+    // not left open over the list, as it was.
+    await walk.getByRole('button', { name: 'Preview PDF', exact: true }).tap();
+    await expect(walk.locator('.pdf-backdrop')).toBeVisible();
+    await goBack();
+    await expect(walk.locator('.pdf-backdrop')).toHaveCount(0);
+    await goBack();
+    await expect(shellOf).not.toHaveClass(/mobile-has-note/);
+    await expect.poll(open).toBe(0);
+
+    // The editor of a picture: a menu in it first, and a text being written;
+    // with nothing changed it closes; with a mark made it saves and closes.
+    await walk.getByLabel('Clear search').tap();
+    await walk.getByRole('heading', { name: 'A picture with annotations' }).tap();
+    const annotate = async () => {
+      // A picture that was just saved is still the one selected, with its
+      // tools showing; a tap on it would put them away.
+      const tools = walk.getByRole('toolbar', { name: 'Picture size and placement' });
+      await walk.waitForTimeout(400);
+      if (!(await tools.isVisible())) await walk.locator('.note-prose .attachment-image img').tap();
+      await tools.getByRole('button', { name: 'Annotate' }).tap();
+      await expect(walk.getByLabel('Picture to annotate')).toBeVisible();
+    };
+    const annotator = walk.getByRole('dialog', { name: /^Annotate / });
+    await annotate();
+    await walk
+      .getByRole('toolbar', { name: 'Annotation tools' })
+      .getByRole('button', { name: 'Colour' })
+      .tap();
+    await expect(walk.getByRole('menu', { name: 'Colour' })).toBeVisible();
+    await goBack();
+    await expect(walk.getByRole('menu', { name: 'Colour' })).toHaveCount(0);
+    await expect(annotator).toBeVisible();
+    await goBack();
+    await expect(annotator).toHaveCount(0);
+    await expect(shellOf).toHaveClass(/mobile-has-note/);
+    await annotate();
+    const marksBefore = Number(await walk.getByLabel('Picture to annotate').getAttribute('data-marks'));
+    await walk
+      .getByRole('toolbar', { name: 'Annotation tools' })
+      .getByRole('button', { name: 'Text', exact: true })
+      .tap();
+    const picture = await walk.getByLabel('Picture to annotate').boundingBox();
+    await walk.touchscreen.tap(picture.x + picture.width * 0.3, picture.y + picture.height * 0.6);
+    await walk.getByLabel('Text on the picture').pressSequentially('here');
+    // Back while a text is being written puts the writing away, no more.
+    await goBack();
+    await expect(walk.getByLabel('Text on the picture')).toHaveCount(0);
+    await expect(annotator).toBeVisible();
+    await walk.touchscreen.tap(picture.x + picture.width * 0.3, picture.y + picture.height * 0.6);
+    await walk.getByLabel('Text on the picture').pressSequentially('here');
+    await walk.getByLabel('Text on the picture').press('Enter');
+    await expect(walk.getByLabel('Picture to annotate')).toHaveAttribute(
+      'data-marks',
+      String(marksBefore + 1),
+    );
+    // Back with a mark made keeps it: the picture is saved, as by its
+    // button, and the editor closes. The note stays open.
+    await goBack();
+    await expect(annotator).toHaveCount(0);
+    await expect(shellOf).toHaveClass(/mobile-has-note/);
+    await annotate();
+    await expect(walk.getByLabel('Picture to annotate')).toHaveAttribute(
+      'data-marks',
+      String(marksBefore + 1),
+    );
+    await goBack();
+    await expect(annotator).toHaveCount(0);
+    await expect(shellOf).toHaveClass(/mobile-has-note/);
+    await goBack();
+    await expect(shellOf).not.toHaveClass(/mobile-has-note/);
+    // Nothing is left open, on the screen or in the history: the next step
+    // back is out of the application.
+    await expect.poll(open).toBe(0);
+    await expect(walk.locator('.modal-backdrop, .context-menu, .annotator, .filter-panel')).toHaveCount(0);
+    await context.close();
+  }
+
+  // The filter and the PDF preview in windows of every size: phones upright,
+  // on their side and with the keyboard up, tablets, a small window, a
+  // laptop, a large monitor. Everything is in the window and in reach.
+  for (const [name, width, height, finger] of [
+    ['a small phone', 360, 640, true],
+    ['a phone', 412, 915, true],
+    ['a phone with its keyboard up', 412, 520, true],
+    ['a phone on its side', 915, 412, true],
+    ['a tablet', 820, 1180, true],
+    ['a tablet on its side', 1180, 820, true],
+    ['a small window', 800, 500, false],
+    ['a laptop', 1366, 768, false],
+    ['a large monitor', 2560, 1440, false],
+  ]) {
+    const context = await browser.newContext({
+      viewport: { width, height },
+      deviceScaleFactor: finger ? 2 : 1,
+      hasTouch: finger,
+      isMobile: finger,
+    });
+    const sized = await context.newPage();
+    sized.on('pageerror', (error) => errors.push(`${name}: ${error.message}`));
+    const press = (locator) => (finger ? locator.tap() : locator.click());
+    const inWindow = async (locator, what) => {
+      const box = await locator.boundingBox();
+      const told = `${what} in ${name} (${width} x ${height})`;
+      expect(box, told).not.toBeNull();
+      expect(box.x, told).toBeGreaterThanOrEqual(0);
+      expect(box.y, told).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width, told).toBeLessThanOrEqual(width + 0.5);
+      expect(box.y + box.height, told).toBeLessThanOrEqual(height + 0.5);
+      return box;
+    };
+    await sized.goto('http://127.0.0.1:7100/?demoTags=600', { waitUntil: 'domcontentloaded' });
+    await sized.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+    await press(sized.getByRole('button', { name: /Filters/ }));
+    await expect(sized.locator('.filter-tags-list .checkbox-label').first()).toBeVisible();
+    const panel = await inWindow(sized.locator('.filter-panel'), 'the filter');
+    await inWindow(sized.getByLabel('Close filters'), 'the button that closes the filter');
+    expect(
+      await sized.locator('.filter-body').evaluate((element) => element.scrollWidth - element.clientWidth),
+      `the filter is no wider than its place in ${name}`,
+    ).toBe(0);
+    // A name typed is answered where it can be seen: the place to type in
+    // and at least two of the tags found are in the panel.
+    await sized.getByLabel('Find a tag').fill('topic 01');
+    await inWindow(sized.getByLabel('Find a tag'), 'the place to type a tag in');
+    const seen = await sized
+      .locator('.filter-tags-list .checkbox-label')
+      .evaluateAll(
+        (rows, bottom) => rows.filter((row) => row.getBoundingClientRect().bottom <= bottom + 0.5).length,
+        panel.y + panel.height,
+      );
+    expect(seen, `tags found that are in view in ${name}`).toBeGreaterThanOrEqual(2);
+    await press(sized.getByRole('button', { name: 'Clear filters', exact: true }));
+    await press(sized.getByLabel('Close filters'));
+
+    await sized.getByLabel('Search notes').fill('Local attachment preview');
+    await press(sized.locator('.note-card').getByText('Local attachment preview', { exact: true }));
+    await press(sized.getByRole('button', { name: 'Preview PDF', exact: true }));
+    await expect(sized.locator('.pdf-sheet[data-page="1"] canvas.pdf-whole')).toBeVisible({ timeout: 30000 });
+    await inWindow(sized.locator('.pdf-modal'), 'the PDF preview');
+    await inWindow(sized.getByLabel('Close PDF preview'), 'the button that closes the PDF');
+    await inWindow(sized.getByLabel('PDF page', { exact: true }), 'the number of the page');
+    const pages = await inWindow(sized.locator('.pdf-scroll'), 'the pages of the PDF');
+    expect(pages.height, `room for the pages in ${name}`).toBeGreaterThan(200);
+    // A page is as wide as its place and no wider, with nothing to move sideways.
+    const sheet = await sized.locator('.pdf-sheet[data-page="1"]').boundingBox();
+    expect(sheet.width, `a page in ${name}`).toBeLessThanOrEqual(pages.width);
+    expect(sheet.width, `a page in ${name}`).toBeGreaterThan(Math.min(pages.width, 1000) * 0.8);
+    expect(
+      await sized.locator('.pdf-scroll').evaluate((element) => element.scrollWidth - element.clientWidth),
+      `the pages are no wider than their place in ${name}`,
+    ).toBe(0);
+    await sized.screenshot({ path: `test-results/bever-pdf-${width}x${height}.png` });
+    await press(sized.getByLabel('Close PDF preview'));
+    await expect(sized.locator('.pdf-backdrop')).toHaveCount(0);
+    await context.close();
+  }
+
   if (errors.length) throw new Error(`Browser errors:\n${errors.join('\n')}`);
   console.log('Visual and interaction checks passed.');
 } finally {
   await browser?.close();
   await server.close();
+}
+
+/**
+ * A PDF of `count` pages of small print and thin lines, made here so that
+ * none has to be kept in the repository. Every fifth page lies on its side.
+ */
+function pdfOfPages(count) {
+  const objects = [];
+  const add = (body) => objects.push(body);
+  const catalog = add(null);
+  const tree = add(null);
+  const font = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
+  const kids = [];
+  for (let page = 1; page <= count; page += 1) {
+    const [width, height] = page % 5 === 0 ? [842, 595] : [595, 842];
+    let stream = `BT /F1 48 Tf 72 ${height - 120} Td (Page ${page}) Tj ET\n`;
+    for (let line = 0; line < 30; line += 1) {
+      stream += `BT /F1 7 Tf 72 ${height - 160 - line * 12} Td (Line ${line + 1} of page ${page}: small print that reads well only when it is drawn sharp.) Tj ET\n`;
+    }
+    stream += `0.4 w 72 ${height - 140} m ${width - 72} ${height - 140} l S\n`;
+    const content = add(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
+    kids.push(
+      add(
+        `<< /Type /Page /Parent ${tree} 0 R /MediaBox [0 0 ${width} ${height}] /Resources << /Font << /F1 ${font} 0 R >> >> /Contents ${content} 0 R >>`,
+      ),
+    );
+  }
+  objects[catalog - 1] = `<< /Type /Catalog /Pages ${tree} 0 R >>`;
+  objects[tree - 1] =
+    `<< /Type /Pages /Kids [${kids.map((kid) => `${kid} 0 R`).join(' ')}] /Count ${count} >>`;
+  let out = '%PDF-1.4\n';
+  const offsets = [];
+  objects.forEach((body, index) => {
+    offsets.push(out.length);
+    out += `${index + 1} 0 obj\n${body}\nendobj\n`;
+  });
+  const xref = out.length;
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  out += offsets.map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`).join('');
+  out += `trailer\n<< /Size ${objects.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, 'latin1');
 }
 
 async function checkFullyInViewport(page, locator) {

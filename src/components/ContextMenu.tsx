@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
+import { useBackCloses } from '../lib/useBackCloses';
+
 export interface MenuItem {
   label: string;
   icon?: ReactNode;
@@ -32,6 +34,7 @@ interface Props {
 export function ContextMenu({ position, items, label, onClose }: Props) {
   const menu = useRef<HTMLDivElement>(null);
   const [placed, setPlaced] = useState<{ left: number; top: number } | null>(null);
+  useBackCloses(true, onClose);
 
   const place = useCallback(() => {
     const box = menu.current?.getBoundingClientRect();

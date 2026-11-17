@@ -17,6 +17,15 @@ export function isHorizontalSwipe(deltaX: number, deltaY: number): boolean {
   return Math.abs(deltaX) > 8 && Math.abs(deltaX) > Math.abs(deltaY) * 1.2;
 }
 
+/**
+ * Whether a drag that began sideways has turned out to go up or down: a
+ * swipe at a list, begun on a slant as a thumb begins it. The drawer lets
+ * go of it, and the list under the finger moves.
+ */
+export function turnedUpright(deltaX: number, deltaY: number): boolean {
+  return Math.abs(deltaY) > 24 && Math.abs(deltaY) > Math.abs(deltaX) * 1.5;
+}
+
 export function drawerOffset(deltaX: number, width: number, opening: boolean): number {
   return opening ? Math.min(0, deltaX - width) : Math.max(-width, Math.min(0, deltaX));
 }

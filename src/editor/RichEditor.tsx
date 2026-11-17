@@ -5,6 +5,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { api } from '../lib/api';
 import { dialogs } from '../lib/dialogs';
 import { onWindowShortened } from '../lib/windowHeight';
+import { useBackCloses } from '../lib/useBackCloses';
 import { useLibraryStore } from '../store/useLibraryStore';
 import { emptyFilter, type Note, type NoteSummary, type Resource } from '../types';
 import { EditorToolbar } from './EditorToolbar';
@@ -346,6 +347,13 @@ export function RichEditor({
     setDrawing(null);
   };
 
+  // Going back closes what is open over the note, before the note.
+  useBackCloses(findOpen, () => {
+    setFindOpen(false);
+    editor?.commands.focus();
+  });
+  useBackCloses(Boolean(clickedLink) && editable, closeLinkBubble);
+  useBackCloses(linkDialog, () => setLinkDialog(false));
   if (!editor) return <div className="editor-loading">Loading editor…</div>;
 
   const closeFind = () => {

@@ -273,6 +273,60 @@ if (new URLSearchParams(window.location.search).has('demoClip')) {
   }
 }
 
+// `?demoTags=600` adds that many tags, and a note for each that has it and
+// the next one; every third note also has "shared". For choosing among more
+// tags than a list can show.
+{
+  const count = Math.min(Number(new URLSearchParams(window.location.search).get('demoTags')), 2000);
+  // Wider than a phone, as the name of a tag can be.
+  const longTagName = 'A tag whose name is longer than the panel is wide, as some are';
+  const nameOf = (index: number) => `Topic ${String(((index - 1) % count) + 1).padStart(4, '0')}`;
+  if (count > 0) {
+    for (const name of ['shared', 'zebra crossing', 'Zulu time', longTagName]) {
+      snapshot.tags.push({
+        id: `tag-${name}`,
+        name,
+        parentId: null,
+        color: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+  }
+  for (let index = 1; index <= count; index += 1) {
+    snapshot.tags.push({
+      id: `tag-topic-${index}`,
+      name: nameOf(index),
+      parentId: null,
+      color: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    addDemo({
+      id: `tagged-${index}`,
+      notebookId: inboxId,
+      title: `Tagged ${String(index).padStart(4, '0')}`,
+      contentHtml: `<p>Note ${index} with tags.</p>`,
+      originalEnml: null,
+      plainText: `Note ${index} with tags.`,
+      createdAt: now - 2_000_000 - index * 1000,
+      updatedAt: now - 2_000_000 - index * 1000,
+      deletedAt: null,
+      attributes: {},
+      evernoteGuid: null,
+      tags: [
+        nameOf(index),
+        nameOf(index + 1),
+        ...(index % 3 === 0 ? ['shared'] : []),
+        ...(index === count ? ['zebra crossing'] : []),
+        ...(index === 1 ? [longTagName] : []),
+      ],
+      resources: [],
+      revision: 1,
+    });
+  }
+}
+
 // `?demoGroups` adds notebooks and tags named in families, a note whose
 // title needs several lines, and a note with laid-out HTML pasted into it.
 if (new URLSearchParams(window.location.search).has('demoGroups')) {
@@ -722,8 +776,9 @@ function thumbnailOf(note: Note): string | null {
   return (shown.find((resource) => resource.md5 === chosen) ?? pictures[0])?.sha256 ?? null;
 }
 
-function listNotes(filter: NoteFilter): NotePage {
-  const { words, matches } = matcher(filter.query);
+/** The notes of a listing, all of them, in its order. */
+function listed(filter: NoteFilter): Note[] {
+  const { matches } = matcher(filter.query);
   const stackNotebooks = filter.stackId
     ? new Set(snapshot.notebooks.filter((item) => item.stackId === filter.stackId).map((item) => item.id))
     : null;
@@ -752,6 +807,23 @@ function listNotes(filter: NoteFilter): NotePage {
     const place = (note: Note) => pinPlace(note) ?? -Infinity;
     all.sort((a, b) => place(b) - place(a));
   }
+  return all;
+}
+
+function listingTags(filter: NoteFilter): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const note of listed(filter)) {
+    for (const name of note.tags) {
+      const id = snapshot.tags.find((tag) => tag.name === name)?.id;
+      if (id) counts[id] = (counts[id] ?? 0) + 1;
+    }
+  }
+  return counts;
+}
+
+function listNotes(filter: NoteFilter): NotePage {
+  const { words } = matcher(filter.query);
+  const all = listed(filter);
   const page = all.slice(filter.offset, filter.offset + filter.limit).map((note): NoteSummary => ({
     id: note.id,
     notebookId: note.notebookId,
@@ -1021,6 +1093,7 @@ function stopDemoSync(): SyncStatus {
 export const browserApi: BeverApi = {
   bootstrap: demo(overview),
   listNotes: demo(listNotes),
+  listingTags: demo(listingTags),
   getNote: demo((id: string) => structuredClone(requireNote(id))),
   createNote: demo((notebookId: string | null) => {
     const timestamp = Date.now();

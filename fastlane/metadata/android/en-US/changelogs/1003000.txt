@@ -1,0 +1,1 @@
+Back closes what was opened last: a preview, a menu, a dialog, the filter. Lists take a swipe whichever way it begins. The filter offers the tags of the notes listed and finds a tag as its name is typed. A PDF is read page under page and made larger with two fingers, sharp at every size. Saving a marked picture takes half a second, not fourteen.

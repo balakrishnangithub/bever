@@ -27,6 +27,7 @@ import { api, isNative } from '../lib/api';
 import { dialogs } from '../lib/dialogs';
 import { editorSession } from '../lib/editorSession';
 import { searchTerms } from '../lib/searchTerms';
+import { useBackCloses } from '../lib/useBackCloses';
 import { message, useLibraryStore } from '../store/useLibraryStore';
 import {
   isPinned,
@@ -101,6 +102,8 @@ function NoteEditor({ note, onBack, focused, onToggleFocus }: WorkspaceProps & {
   );
   const [metadataOpen, setMetadataOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  useBackCloses(metadataOpen, () => setMetadataOpen(false));
+  useBackCloses(shortcutsOpen, () => setShortcutsOpen(false));
   const [tagInput, setTagInput] = useState('');
   const tagListId = useId();
   const titleInput = useRef<HTMLTextAreaElement>(null);

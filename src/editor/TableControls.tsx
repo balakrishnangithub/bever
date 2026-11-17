@@ -13,6 +13,8 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+
+import { useBackCloses } from '../lib/useBackCloses';
 import { createPortal } from 'react-dom';
 
 import { ContextMenu, type MenuItem } from '../components/ContextMenu';
@@ -141,6 +143,7 @@ export function InsertTableButton({ editor, disabled }: { editor: Editor; disabl
   const trigger = useRef<HTMLButtonElement>(null);
   const popover = useRef<HTMLDivElement>(null);
   const id = useId();
+  useBackCloses(open, () => setOpen(false));
 
   useLayoutEffect(() => {
     if (!open) return;

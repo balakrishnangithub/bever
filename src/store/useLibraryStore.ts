@@ -37,6 +37,11 @@ interface LibraryState {
   total: number;
   /** A listing was asked for and has not arrived: it is not known to be empty. */
   listLoading: boolean;
+  /**
+   * Counts the listings that have arrived, so that what is worked out from
+   * a whole listing (the tags its notes have) is worked out again.
+   */
+  listed: number;
   /** The search as it was understood, when it was answered by another spelling. */
   corrected: string | null;
   selectedNote: Note | null;
@@ -297,6 +302,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
     rows: [],
     total: 0,
     listLoading: true,
+    listed: 0,
     corrected: null,
     selectedNote: null,
     filter: firstFilter(),
@@ -390,6 +396,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => {
           rows,
           total,
           listLoading: false,
+          listed: get().listed + 1,
           corrected: answers.at(-1)?.corrected ?? null,
           error: null,
         });

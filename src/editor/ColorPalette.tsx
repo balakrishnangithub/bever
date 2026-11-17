@@ -1,6 +1,8 @@
 import type { Editor } from '@tiptap/core';
 import { Check, Highlighter } from 'lucide-react';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+
+import { useBackCloses } from '../lib/useBackCloses';
 import { createPortal } from 'react-dom';
 
 const TEXT_COLORS = [
@@ -36,6 +38,7 @@ export function ColorPalette({ editor, kind }: { editor: Editor; kind: 'text' | 
   const trigger = useRef<HTMLButtonElement>(null);
   const popover = useRef<HTMLSpanElement>(null);
   const id = useId();
+  useBackCloses(open, () => setOpen(false));
   const label = kind === 'text' ? 'Text color' : 'Highlight color';
   const textColor = String(editor.getAttributes('textStyle').color ?? '');
   const currentColor = kind === 'text' ? textColor : String(editor.getAttributes('highlight').color ?? '');

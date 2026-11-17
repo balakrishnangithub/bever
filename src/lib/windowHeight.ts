@@ -24,3 +24,24 @@ export function showFocusedField() {
     field.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
 }
+
+/**
+ * Takes the focus from the field that has it, for something that opens over
+ * the whole window: an editor of a picture, a preview. On a phone the field
+ * would keep its keyboard up under what was opened, over half of it, and
+ * the keyboard would take the first Back for itself. Returns what gives the
+ * focus back when the thing closes; where the pointer is a finger it is not
+ * given back, since that would bring the keyboard up again unasked.
+ */
+export function leaveField(): () => void {
+  const field = document.activeElement;
+  if (!(field instanceof HTMLElement) || !field.matches('input, textarea, [contenteditable="true"]')) {
+    return () => undefined;
+  }
+  field.blur();
+  return () => {
+    if (field.isConnected && !window.matchMedia('(pointer: coarse)').matches) {
+      field.focus({ preventScroll: true });
+    }
+  };
+}

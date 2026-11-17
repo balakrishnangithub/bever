@@ -2,6 +2,7 @@ import { X } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { useDialogStore, type ChooseOptions, type ConfirmOptions, type PromptOptions } from '../lib/dialogs';
+import { useBackCloses } from '../lib/useBackCloses';
 
 /** Renders the dialog that is currently requested. Mount once, near the root. */
 export function DialogHost() {
@@ -75,6 +76,7 @@ function ChooseDialog({
 }
 
 function Frame({ title, onCancel, children }: { title: string; onCancel: () => void; children: ReactNode }) {
+  useBackCloses(true, onCancel);
   return (
     <div className="modal-backdrop dialog-backdrop" onMouseDown={onCancel}>
       <section

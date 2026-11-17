@@ -97,6 +97,9 @@ Saving is serialized by `draftController.ts`: one save at a time, each carrying 
 - Text recognition runs after an import, on its own worker, and can be paused.
 - Attachments are served to the WebView in ranges of at most 4 MiB, so media can seek without loading a whole file.
 - Synchronization transfers four items at a time, streams attachments, and decides from flags which notes need uploading, so an idle run loads no note.
+- A picture is written out of its canvas as text and the text turned into bytes (`canvasPng.ts`), not as a file by `toBlob`: Android's web view makes such a file when it finds the time, which on a phone was 4 to 13 seconds for a picture that takes 0.2 seconds the direct way.
+- The tags the filter offers are counted by the library over the whole listing, in one query with the conditions the listing itself has (`search::listing_tags`): the interface has only the part of a listing that was in view, and cannot count.
+- A PDF is shown by `pdfView.ts`, which keeps the arithmetic in `pdfGeometry.ts`. Only the pages in view and within a view's height of it are drawn, one drawing at a time, the page in the middle first; pages more than three views away give their drawings back. The drawing of a whole page has at most 4 million pixels where the pointer is a finger and 9 million elsewhere. A page shown larger than that keeps the drawing it has, stretched, and the part of it in view is drawn over it at the size it is shown, once nothing has moved for a moment. While the size is being changed nothing is drawn: the drawings there are stretched, and one under way is given up.
 
 ## Failures
 
@@ -112,10 +115,24 @@ Saving is serialized by `draftController.ts`: one save at a time, each carrying 
 
 On desktop, closing during a run hides the main window to the tray; opening it cancels the requested exit, while quitting stops the run and leaves. On Android, a native `dataSync` foreground service keeps the process alive and reports notification progress. The maintained Kotlin, manifest, and drawable live in `src-tauri/android/app/src/main`; `scripts/sync-android-source.cjs` copies this small overlay into the ignored generated Tauri Android project during `npm run android:init`, `android:dev`, and `android:build`. Generated projects, native binaries, and icons remain outside source control.
 
+## Going back
+
+Whatever opens over something else is closed by going back, the thing opened last first, one thing for one step. `backStack.ts` keeps the order: the application's layers (the drawer, the open note in the phone layout, the settings, the screens of notebooks and tags; `useAppLayers.ts`) and everything else that opens (`useBackCloses.ts`, one line in the component that opens: dialogs, menus, panels, previews, the editors of pictures and the menus in them, a selection of notes). Each has an entry in the window's history, so that Android's Back, which steps back in that history, lands on what was under it. A thing closed by its own button has its entry taken out by a step of our own. Something new that opens over the page has to use `useBackCloses`, or Back passes it by and closes what is under it.
+
+Entries are made only when the page has been touched since the last step back someone took. Android's web view honours the entries a page makes in answer to a touch or a key, as many as it makes for one. An entry made after Back with no touch in between it takes for a trap: Back then passes every entry of the page by and leaves the application. That was measured on a phone, case by case, and is why a thing that stays open when Back asks it to close (an editor of a picture that is still saving) has no entry until the next touch; Back closes it all the same, as the topmost thing there is. For the same reason nothing asks a question in answer to Back: the editors of pictures save what was drawn and close.
+
+What opens over the whole window takes the focus from the field under it (`leaveField`), or a phone's keyboard stays up over half of it and takes the first Back for itself.
+
 ## Android specifics
 
 The system file picker returns `content://` documents, not paths. The shell opens them through `tauri-plugin-fs`, which understands such documents, and asks the Kotlin plugin for a document's display name and size. Opening an attachment in another application goes through the application's `FileProvider`. The on-screen keyboard is accounted for in the window insets.
 
+In the phone layout sideways swipes belong to the drawer, and `useDrawerGestures.ts` takes them as they come. They are not kept from the browser by `touch-action: pan-y`, on the frame or on a list, though that is what such a rule seems made for: the browser decides at the first movement of a touch whether it is an allowed one, and a swipe that begins more sideways than upward, as a thumb's does, is then no scroll for the whole of it, however it goes on. Lists were deaf to such swipes until 1.3.0. Everything that scrolls allows both directions (`pan-x pan-y`), which also keeps two fingers from making the window larger; a sideways flick on a list starts nothing that would swallow the tap after it, which was tried on a phone. And an element is bound by what its ancestors allow, up to the first of them that scrolls in that direction, so that one `pan-y` far up is enough to bring the fault back. A list that scrolls inside something that scrolls is avoided for the same fingers: a swipe goes to one of the two, and at the end of the inner one to neither.
+
+The PDF preview is drawn into `document.body`, not into the note. Inside the note it is inside the frame that makes a note larger (`noteZoom.ts`), which would take two fingers on it for its own.
+
 ## Future shells
+
+The interface is laid out by the size of its window and by what points at it, not by the system it runs on: the phone layout is a window up to 760 pixels wide, rows are finger-sized where the pointer is a finger (`pointer: coarse`), and the browser check opens the filter and the PDF preview in windows from a phone on its side to a large monitor. One thing is known to differ on WebKit, which iOS and macOS use: two fingers on a trackpad arrive there as gesture events, not as Ctrl with the wheel, so `noteZoom.ts` and `pdfView.ts`, which answer touches and the wheel, would have to answer those too.
 
 Linux and macOS can use the same Tauri/React shell. iOS will need platform-specific review of file picking, background execution, OAuth callback handling, and secure storage. These are not claimed as working targets until built and tested.

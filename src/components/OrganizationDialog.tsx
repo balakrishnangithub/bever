@@ -1,6 +1,8 @@
 import { Copy, FolderInput, Tag, Tags, X } from 'lucide-react';
 import { useState } from 'react';
 
+import { useBackCloses } from '../lib/useBackCloses';
+
 import { message, useLibraryStore } from '../store/useLibraryStore';
 import type { NoteOrganizationAction } from '../types';
 
@@ -34,6 +36,7 @@ export function OrganizationDialog({ action, noteIds, onClose, onComplete }: Pro
   const [tagInput, setTagInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useBackCloses(true, onClose);
   const tagging = action === 'addTags' || action === 'removeTags';
   const removing = action === 'removeTags';
   const title = TITLES[action];

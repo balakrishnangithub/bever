@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { drawerOffset, isHorizontalSwipe, shouldToggleDrawer, swipeSpeed } from './drawerGestures';
+import {
+  drawerOffset,
+  isHorizontalSwipe,
+  shouldToggleDrawer,
+  swipeSpeed,
+  turnedUpright,
+} from './drawerGestures';
 
 describe('touch drawer gestures', () => {
   it('accepts deliberate horizontal swipes', () => {
@@ -45,6 +51,18 @@ describe('touch drawer gestures', () => {
         { x: 100, time: 400 },
       ]),
     ).toBe(0);
+  });
+
+  it('lets go of a drag that began on a slant and went on upward', () => {
+    // A thumb's swipe at a list: sideways at first, which the drawer takes…
+    expect(isHorizontalSwipe(-30, -21)).toBe(true);
+    expect(turnedUpright(-30, -21)).toBe(false);
+    // …and upright from there on, which is the list's.
+    expect(turnedUpright(-30, -61)).toBe(true);
+    expect(turnedUpright(30, 140)).toBe(true);
+    // A drag that stays sideways is the drawer's to the end.
+    expect(turnedUpright(-120, -30)).toBe(false);
+    expect(turnedUpright(-14, -22)).toBe(false);
   });
 
   it('clamps drag positions to the drawer width', () => {

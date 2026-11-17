@@ -223,10 +223,19 @@ fn slips(typed: &[char], word: &[char], most: usize) -> Option<usize> {
     Some(previous[word.len()]).filter(|count| *count <= most)
 }
 
-fn search_terms(library: &Library, filter: &NoteFilter, terms: &[Term]) -> Result<NotePage> {
-    let mut compiled = compile_terms(terms)?;
-    add_filter_predicates(&mut compiled, filter);
+/// Where the notes of a listing are found: what follows `FROM` and
+/// `WHERE` in a question about them, with what the question marks stand for.
+struct Scope {
+    from: &'static str,
+    where_sql: String,
+    parameters: Vec<SqlValue>,
+    /// The index answers it, so that its measure of the answers means something.
+    ranked: bool,
+}
 
+/// The notes that answer `terms` and pass `filter`.
+fn scope(compiled: &mut Compiled, filter: &NoteFilter) -> Scope {
+    add_filter_predicates(compiled, filter);
     let mut parameters = Vec::new();
     let mut conditions = Vec::new();
     let from = if let Some(expression) = compiled.fts.take() {
@@ -244,6 +253,74 @@ fn search_terms(library: &Library, filter: &NoteFilter, terms: &[Term]) -> Resul
     } else {
         conditions.join(" AND ")
     };
+    Scope {
+        from,
+        where_sql,
+        parameters,
+        ranked,
+    }
+}
+
+/// How many notes of a listing have each tag, by the tag's id: of all the
+/// notes the listing has, not of the part of it that is on a page. A tag
+/// none of them has is not among the answers.
+///
+/// The listing is the one [`search_notes`] gives for the same filter,
+/// also where that was answered by another spelling.
+pub(crate) fn listing_tags(library: &Library, filter: &NoteFilter) -> Result<HashMap<String, u64>> {
+    let terms = tokenize(&filter.query);
+    let (tags, any) = tags_of_terms(library, filter, &terms)?;
+    if any {
+        return Ok(tags);
+    }
+    let Some(respelt) = respelled(library, &terms)? else {
+        return Ok(tags);
+    };
+    Ok(tags_of_terms(library, filter, &respelt)?.0)
+}
+
+/// The tags of the notes that answer `terms`, and whether any note does.
+fn tags_of_terms(
+    library: &Library,
+    filter: &NoteFilter,
+    terms: &[Term],
+) -> Result<(HashMap<String, u64>, bool)> {
+    let mut compiled = compile_terms(terms)?;
+    let Scope {
+        from,
+        where_sql,
+        parameters,
+        ..
+    } = scope(&mut compiled, filter);
+    let connection = library.connection.lock();
+    let tags = connection
+        .prepare(&format!(
+            "SELECT nt.tag_id, count(*) FROM note_tags nt
+             WHERE nt.note_id IN (SELECT n.id FROM {from} WHERE {where_sql})
+             GROUP BY nt.tag_id"
+        ))?
+        .query_map(params_from_iter(parameters.iter()), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?))
+        })?
+        .collect::<std::result::Result<HashMap<_, _>, _>>()?;
+    // Notes without a tag are a listing too.
+    let any = !tags.is_empty()
+        || connection.query_row(
+            &format!("SELECT EXISTS(SELECT 1 FROM {from} WHERE {where_sql})"),
+            params_from_iter(parameters.iter()),
+            |row| row.get(0),
+        )?;
+    Ok((tags, any))
+}
+
+fn search_terms(library: &Library, filter: &NoteFilter, terms: &[Term]) -> Result<NotePage> {
+    let mut compiled = compile_terms(terms)?;
+    let Scope {
+        from,
+        where_sql,
+        mut parameters,
+        ranked,
+    } = scope(&mut compiled, filter);
     let limit = filter.limit.clamp(1, 500) as usize;
     let offset = filter.offset as usize;
 
@@ -2006,5 +2083,107 @@ mod tests {
         assert_eq!(least_between(&[&vec![4, 9], &vec![2, 10]]), Some(0));
         assert_eq!(least_between(&[&vec![9], &vec![2]]), None);
         assert_eq!(least_between(&[&vec![1], &vec![3], &vec![2, 6]]), Some(3));
+    }
+
+    #[test]
+    fn the_tags_of_a_listing_are_counted_over_all_of_it() {
+        let (_directory, library) = library();
+        add_note(
+            &library,
+            "Roadmap",
+            "<p>Budget for spring</p>",
+            &["work", "plan"],
+        );
+        add_note(&library, "Minutes", "<p>Budget agreed</p>", &["work"]);
+        add_note(&library, "Seeds", "<p>Tomatoes</p>", &["garden", "plan"]);
+        add_note(&library, "Untagged", "<p>Budget of nothing</p>", &[]);
+        let binned = add_note(
+            &library,
+            "Old",
+            "<p>Budget of last year</p>",
+            &["work", "old"],
+        );
+        library.set_notes_trashed(&[binned], true).unwrap();
+        let ids = library
+            .snapshot()
+            .unwrap()
+            .tags
+            .into_iter()
+            .map(|tag| (tag.name, tag.id))
+            .collect::<HashMap<_, _>>();
+        // By name, so that what is compared can be read.
+        let counted = |filter: NoteFilter| {
+            let counts = library.listing_tags(&filter).unwrap();
+            let mut named = ids
+                .iter()
+                .filter_map(|(name, id)| counts.get(id).map(|count| (name.as_str(), *count)))
+                .collect::<Vec<_>>();
+            named.sort_unstable();
+            assert_eq!(
+                named.len(),
+                counts.len(),
+                "a tag that is not in the library"
+            );
+            named
+        };
+
+        // Every note outside the trash; the page asked for changes nothing.
+        assert_eq!(
+            counted(NoteFilter {
+                limit: 1,
+                offset: 3,
+                ..NoteFilter::default()
+            }),
+            [("garden", 1), ("plan", 2), ("work", 2)]
+        );
+        // With a tag chosen, what is left is what its notes also have.
+        assert_eq!(
+            counted(NoteFilter {
+                tag_ids: vec![ids["plan"].clone()],
+                ..NoteFilter::default()
+            }),
+            [("garden", 1), ("plan", 2), ("work", 1)]
+        );
+        // A search narrows it as it narrows the list.
+        assert_eq!(
+            counted(NoteFilter {
+                query: "budget".into(),
+                ..NoteFilter::default()
+            }),
+            [("plan", 1), ("work", 2)]
+        );
+        // The trash is counted where it is listed.
+        assert_eq!(
+            counted(NoteFilter {
+                query: "budget".into(),
+                include_trash: true,
+                ..NoteFilter::default()
+            }),
+            [("old", 1), ("plan", 1), ("work", 3)]
+        );
+        // A search answered by another spelling has that answer's tags.
+        assert_eq!(
+            counted(NoteFilter {
+                query: "tomatos".into(),
+                ..NoteFilter::default()
+            }),
+            [("garden", 1), ("plan", 1)]
+        );
+        // Notes without a tag are found as typed, and nothing is respelt:
+        // "nothing" is in the one note that has no tag.
+        assert_eq!(
+            counted(NoteFilter {
+                query: "nothing".into(),
+                ..NoteFilter::default()
+            }),
+            []
+        );
+        assert_eq!(
+            counted(NoteFilter {
+                query: "zzzzzz".into(),
+                ..NoteFilter::default()
+            }),
+            []
+        );
     }
 }

@@ -19,6 +19,10 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
+import { useBackCloses } from '../lib/useBackCloses';
+import { canvasPngSoon } from './canvasPng';
+import { leaveField } from '../lib/windowHeight';
+
 import { isPng, originalFor, readAnnotations, writeAnnotations, type EmbeddedOriginal } from './pngChunks';
 import {
   bitmapsOf,
@@ -94,12 +98,6 @@ async function pictureFrom(bytes: Uint8Array, mime: string): Promise<HTMLImageEl
   }
 }
 
-async function pngBytes(canvas: HTMLCanvasElement): Promise<Uint8Array> {
-  const blob = await new Promise<Blob | null>((done) => canvas.toBlob(done, 'image/png'));
-  if (!blob) throw new Error('The picture could not be written.');
-  return new Uint8Array(await blob.arrayBuffer());
-}
-
 /**
  * Reads a picture for annotating. A picture Evernote annotated carries its
  * original and its marks, which are taken up as they are. Any other picture
@@ -120,15 +118,15 @@ async function load(bytes: Uint8Array, mime: string): Promise<Loaded> {
   const width = image.naturalWidth || 1;
   const height = image.naturalHeight || 1;
   // Evernote keeps originals as PNG, so another format is converted once.
-  // That takes seconds for a photograph, so it is not waited for here: it
-  // goes on while the picture is drawn on, and saving waits for the rest.
+  // That takes a moment for a photograph, so it is not waited for here: it
+  // is done once the picture is showing, and saving waits for the rest.
   let original = Promise.resolve(bytes);
   if (!isPng(bytes) || embedded) {
     const canvas = window.document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
     canvas.getContext('2d')?.drawImage(image, 0, 0, width, height);
-    original = pngBytes(canvas);
+    original = canvasPngSoon(canvas);
   }
   const guid = crypto.randomUUID();
   const fresh = newDocument(width, height, guid);
@@ -190,6 +188,9 @@ export function ImageAnnotator({ bytes, mime, name, onSave, onClose }: Props) {
     scale: number;
   } | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // A field of the note under this keeps no keyboard up over it.
+  useEffect(() => leaveField(), []);
   const canvas = useRef<HTMLCanvasElement>(null);
   const stage = useRef<HTMLDivElement>(null);
   const gesture = useRef<{
@@ -505,13 +506,30 @@ export function ImageAnnotator({ bytes, mime, name, onSave, onClose }: Props) {
       if (!context) throw new Error('The picture could not be drawn.');
       paint(context, loaded, marks);
       const document = withMarks(loaded.document, marks);
-      const [picture, originals] = await Promise.all([pngBytes(output), loaded.originals]);
+      const [picture, originals] = await Promise.all([canvasPngSoon(output), loaded.originals]);
       await onSave(writeAnnotations(picture, { manifest: document, originals }));
     } catch (error) {
       setFailure(error instanceof Error ? error.message : 'The picture could not be saved.');
       setSaving(false);
     }
   };
+
+  // Going back leaves, and keeps what was marked: it is saved as the button
+  // would save it, and the editor closes when that is done. Nothing is
+  // asked. A question would have to be answered by Back as well, and one
+  // Back more would be out of the note. What is open in here (a menu, a
+  // text being written) is closed by Back first, each by itself.
+  useBackCloses(true, () => {
+    if (saving) return false;
+    if (changed) {
+      void save();
+      return false;
+    }
+    onClose();
+    return undefined;
+  });
+  useBackCloses(menu !== null, () => setMenu(null));
+  useBackCloses(writing !== null, () => setWriting(null));
 
   const choose = (next: Tool) => {
     commitWriting();

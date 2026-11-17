@@ -23,6 +23,10 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
+import { useBackCloses } from '../lib/useBackCloses';
+import { canvasPngSoon } from './canvasPng';
+import { leaveField } from '../lib/windowHeight';
+
 import {
   BACKGROUNDS,
   drawPattern,
@@ -122,12 +126,6 @@ function fitted(strokes: InkStroke[], size: { width: number; height: number }, m
   };
 }
 
-async function pngBytes(canvas: HTMLCanvasElement): Promise<Uint8Array> {
-  const blob = await new Promise<Blob | null>((done) => canvas.toBlob(done, 'image/png'));
-  if (!blob) throw new Error('The picture could not be written.');
-  return new Uint8Array(await blob.arrayBuffer());
-}
-
 /**
  * Changes a sketch drawn in Evernote, in the full window.
  *
@@ -157,6 +155,9 @@ export function SketchEditor({ bytes, blank, name, onSave, onClose }: Props) {
   const [markerSize, setMarkerSize] = useState(2);
   const [snap, setSnap] = useState(false);
   const [menu, setMenu] = useState<'color' | 'size' | 'background' | 'pattern' | null>(null);
+
+  // A field of the note under this keeps no keyboard up over it.
+  useEffect(() => leaveField(), []);
   const [view, setView] = useState<View>({ x: 0, y: 0, zoom: 1 });
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [selection, setSelection] = useState<number[]>([]);
@@ -715,7 +716,7 @@ export function SketchEditor({ bytes, blank, name, onSave, onClose }: Props) {
         height: follows ? height : sketch.height,
       };
       await onSave(
-        await writeInk(await pngBytes(output), {
+        await writeInk(await canvasPngSoon(output), {
           name: sketch.name,
           inkml: serializeInk(saved),
           width: saved.width,
@@ -727,6 +728,22 @@ export function SketchEditor({ bytes, blank, name, onSave, onClose }: Props) {
       setSaving(false);
     }
   };
+
+  // Going back leaves, and keeps what was drawn: it is saved as the button
+  // would save it, and the editor closes when that is done. Nothing is
+  // asked. A question would have to be answered by Back as well, and one
+  // Back more would be out of the note. What is open in here (a menu, a
+  // text being written) is closed by Back first, each by itself.
+  useBackCloses(true, () => {
+    if (saving) return false;
+    if (changed && drawable) {
+      void save();
+      return false;
+    }
+    onClose();
+    return undefined;
+  });
+  useBackCloses(menu !== null, () => setMenu(null));
 
   const choose = (next: Tool) => {
     setTool(next);

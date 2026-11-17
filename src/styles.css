@@ -500,7 +500,9 @@ kbd {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  touch-action: pan-y;
+  /* A swipe is taken whichever way it begins; see the phone layout's
+     `.app-shell`. */
+  touch-action: pan-x pan-y;
   padding: 0 10px 20px;
   scrollbar-width: thin;
   scrollbar-color: var(--line) transparent;
@@ -716,7 +718,10 @@ kbd {
   left: 12px;
   right: 12px;
   z-index: 12;
-  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100% - 180px);
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--panel-strong);
@@ -724,10 +729,27 @@ kbd {
 }
 .filter-panel header {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
+  gap: 12px;
+  padding: 10px 10px 8px 14px;
   font-size: 13px;
+}
+.filter-panel header strong {
+  flex: 1;
+}
+/* The one part of the panel that scrolls, up and down. It takes a swipe
+   whichever way it begins; see the phone layout's `.app-shell`. */
+.filter-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0 14px 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
+  scrollbar-width: thin;
 }
 .filter-panel label {
   display: grid;
@@ -748,7 +770,7 @@ kbd {
 }
 .filter-dates {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px;
 }
 .filter-panel .checkbox-label {
@@ -757,6 +779,7 @@ kbd {
   gap: 7px;
 }
 .filter-panel .checkbox-label input {
+  flex: 0 0 auto;
   width: auto;
 }
 .text-button {
@@ -764,39 +787,129 @@ kbd {
   color: var(--accent);
   font-size: 12px;
 }
-.filter-panel {
-  max-height: calc(100% - 180px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  touch-action: pan-y;
-  scrollbar-width: thin;
-}
 .filter-tags {
-  display: grid;
-  gap: 2px;
-  max-height: 170px;
-  margin: 4px 0 13px;
-  padding: 10px 0 0;
-  overflow-y: auto;
-  border: 0;
   border-top: 1px solid var(--soft-line);
 }
-.filter-tags legend {
-  padding: 0;
+/* Stays at the top of the panel while the tags move under it. */
+.filter-tags-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 10px 0 8px;
+  background: var(--panel-strong);
+}
+.filter-tags-head > p {
+  margin: 0;
   color: var(--ink);
   font-size: 12px;
   font-weight: 650;
 }
-.filter-tags legend span {
+.filter-tags-head > p span {
   color: var(--faint);
   font-size: 10px;
   font-weight: 400;
 }
-.filter-tags > p {
+.filter-tags-find {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 0 4px 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+.filter-tags-find:focus-within {
+  border-color: var(--accent);
+}
+.filter-tags-find > svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: var(--faint);
+}
+.filter-panel .filter-tags-find input {
+  flex: 1;
+  padding: 7px 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+}
+.filter-tags-find input::-webkit-search-cancel-button {
+  display: none;
+}
+.filter-tags-find .icon-button {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+}
+/* One column as wide as the panel and no wider: a column that takes its
+   width from what is in it is as wide as the longest name, and the panel
+   then moves sideways under a finger. A long name is cut short instead. */
+.filter-tags-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+}
+.filter-tags-list .checkbox-label {
+  min-height: 26px;
+  margin: 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.filter-tags-list .checkbox-label > span {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filter-tags-list .checkbox-label:hover {
+  color: var(--ink);
+}
+/* A tag that none of the listed notes has: choosing it leaves nothing. */
+.filter-tags-list .checkbox-label.elsewhere {
+  color: var(--faint);
+}
+.filter-tags-list .text-button {
+  justify-self: start;
+  margin-top: 6px;
+}
+.filter-tags-note {
+  min-width: 0;
   margin: 5px 0;
+  overflow-wrap: anywhere;
   color: var(--faint);
   font-size: 12px;
   line-height: 1.5;
+}
+/* In a short window (a phone on its side or with its keyboard up, a small
+   window on a computer) the panel has the height there is: under the
+   search box it would have room for a row or two, or for none. */
+@media (max-height: 620px) {
+  .filter-panel {
+    top: 8px;
+    max-height: calc(100% - 16px);
+  }
+}
+/* Under a finger a row is as tall as a finger is wide. */
+@media (pointer: coarse) {
+  .filter-tags-list .checkbox-label {
+    min-height: 40px;
+    font-size: 13px;
+  }
+  .filter-tags-list .checkbox-label input {
+    width: 18px;
+    height: 18px;
+  }
+  .filter-panel .filter-tags-find input {
+    padding: 10px 0;
+    font-size: 14px;
+  }
+  .filter-tags-find .icon-button {
+    width: 32px;
+    height: 32px;
+  }
 }
 .import-progress {
   display: grid;
@@ -2074,7 +2187,7 @@ kbd {
 .sidebar-scroll,
 .document-column {
   overscroll-behavior: contain;
-  touch-action: pan-y;
+  touch-action: pan-x pan-y;
   -webkit-overflow-scrolling: touch;
 }
 .workspace-body {
@@ -2305,7 +2418,8 @@ kbd {
   display: flex;
   flex-direction: column;
   width: min(1040px, 96vw);
-  height: min(900px, 94vh);
+  /* As tall as the window allows: a page is taller than it is wide. */
+  height: 94vh;
   max-height: none;
   overflow: hidden;
   padding: 12px;
@@ -2326,33 +2440,155 @@ kbd {
   display: flex;
   align-items: center;
   flex: 0 0 auto;
-  gap: 5px;
+  gap: 3px;
   color: var(--muted);
   font-size: 12px;
 }
-.pdf-canvas-wrap {
+.pdf-page-number {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.pdf-page-number input {
+  width: 4.2ch;
+  padding: 4px 2px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  text-align: center;
+  box-sizing: content-box;
+}
+.pdf-zoom-level {
+  min-width: 46px;
+  padding: 6px 4px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.pdf-zoom-level:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+.pdf-controls button:disabled {
+  opacity: 0.45;
+}
+.pdf-frame {
+  position: relative;
   display: grid;
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  place-items: start center;
   border-radius: 7px;
   background: var(--bg);
-  overscroll-behavior: contain;
-  touch-action: pan-y;
 }
-.pdf-canvas-wrap > svg,
-.pdf-canvas-wrap > p {
+.pdf-frame > svg,
+.pdf-frame > p {
+  grid-area: 1 / 1;
   place-self: center;
+  margin: 0 20px;
+  text-align: center;
 }
-.pdf-canvas-wrap canvas {
-  display: block;
-  max-width: none;
+/* The pages move in it both ways. Two fingers are the application's to
+   answer (pinch-zoom is left out), and while they are down nothing scrolls
+   but what the application moves. */
+.pdf-scroll {
+  grid-area: 1 / 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border-radius: 7px;
+  outline: 0;
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.pdf-scroll.pinching {
+  overflow: hidden;
+}
+.pdf-scroll.dragging {
+  cursor: grabbing;
+}
+.pdf-pages {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 100%;
+  padding: 12px 16px;
+}
+/* A page: every one is --pdf-width wide, so that one number makes them all
+   larger, and --pdf-shape times as tall as it is wide. */
+.pdf-sheet {
+  position: relative;
+  flex: 0 0 auto;
+  width: var(--pdf-width, 100px);
+  height: calc(var(--pdf-width, 100px) * var(--pdf-shape, 1.414));
+  overflow: hidden;
   background: white;
   box-shadow: 0 2px 15px rgba(0, 0, 0, 0.18);
 }
-.pdf-canvas-wrap canvas[height='0'] {
-  display: none;
+.pdf-sheet canvas {
+  position: absolute;
+  display: block;
+  max-width: none;
+}
+/* The whole page, stretched over it until it is drawn again at its new size. */
+.pdf-sheet .pdf-whole {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.pdf-sheet.failed::after {
+  content: 'This page could not be drawn.';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  color: #6b6b6b;
+  font-size: 12px;
+  text-align: center;
+}
+@media (max-width: 760px) {
+  /* On a phone the document has the whole screen. */
+  .modal-backdrop.pdf-backdrop {
+    padding: 0;
+    overflow: hidden;
+  }
+  .modal.pdf-modal {
+    place-self: stretch;
+    width: auto;
+    height: auto;
+    max-height: none;
+    padding: calc(var(--safe-top, 0px) + 6px) var(--safe-right, 0px) var(--safe-bottom, 0px)
+      var(--safe-left, 0px);
+    border: 0;
+    border-radius: 0;
+  }
+  .pdf-modal > header {
+    margin: 0 6px 6px 12px;
+  }
+  .pdf-frame,
+  .pdf-scroll {
+    border-radius: 0;
+  }
+  /* Scrolling steps through the pages, and fingers change the size. */
+  .pdf-step,
+  .pdf-zoom,
+  .pdf-zoom-level {
+    display: none;
+  }
+  .pdf-pages {
+    padding: 10px 16px;
+  }
 }
 
 .shortcuts-modal dl {
@@ -2416,7 +2652,14 @@ kbd {
   .app-shell {
     height: 100dvh;
     padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
-    touch-action: pan-y;
+    /* One finger moves things, up and down and sideways; two do not make
+       the window larger. Up and down only (pan-y) looks like what a list
+       wants, and is not: the browser decides at the first movement of a
+       touch, and a swipe that begins more sideways than upward, as a
+       thumb's does, is then no scroll for the whole of it. Sideways swipes
+       are still the drawer's: `useDrawerGestures` takes them as they come,
+       and a list has nothing to move sideways. */
+    touch-action: pan-x pan-y;
   }
   .sidebar {
     height: 100dvh;
@@ -2460,10 +2703,7 @@ kbd {
   .modal {
     max-height: calc(100dvh - 32px - var(--safe-top) - var(--safe-bottom));
     overscroll-behavior: contain;
-    touch-action: pan-y;
-  }
-  .pdf-modal {
-    height: calc(100dvh - 32px - var(--safe-top) - var(--safe-bottom));
+    touch-action: pan-x pan-y;
   }
   .global-sync-indicator {
     right: calc(12px + var(--safe-right));
@@ -2723,8 +2963,10 @@ kbd {
 }
 
 /* Small dialogs: prompts and confirmations */
+/* Over everything else, the editors of pictures too: a question may be
+   asked from any of them. */
 .dialog-backdrop {
-  z-index: 350;
+  z-index: 600;
 }
 .small-dialog {
   width: min(400px, 100%);
@@ -4391,7 +4633,7 @@ span.stack-toggle {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  touch-action: pan-y;
+  touch-action: pan-x pan-y;
   padding: 6px 16px 30px;
   scrollbar-width: thin;
   scrollbar-color: var(--line) transparent;

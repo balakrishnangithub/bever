@@ -229,6 +229,48 @@ try {
     }
     await page.getByRole('button', { name: /Filters/ }).click();
     await page.getByRole('button', { name: 'Clear filters', exact: true }).click();
+
+    // An imported PDF is read from the attachment store a part at a time,
+    // shown as its pages one under another, and drawn again when made larger.
+    await page.locator('.filter-panel select').first().selectOption('pdf');
+    await page.getByLabel('Close filters').click();
+    if ((await total()) > 0) {
+      await page.locator('.note-card .note-open').first().click();
+      await page.getByRole('button', { name: 'Preview PDF', exact: true }).first().click();
+      const firstPage = page.locator('.pdf-sheet[data-page="1"]');
+      await expect(firstPage.locator('canvas.pdf-whole')).toBeVisible({ timeout: 60000 });
+      await expect(page.getByLabel('Loading PDF')).toHaveCount(0);
+      const sheets = await page.locator('.pdf-sheet').count();
+      await expect(page.locator('.pdf-controls')).toContainText(`/ ${sheets}`);
+      const drawnAt = () => firstPage.evaluate((element) => Number(element.dataset.drawn));
+      const fitted = await drawnAt();
+      const box = await firstPage.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + Math.min(box.height / 2, 200));
+      await page.keyboard.down('Control');
+      for (let turn = 0; turn < 3; turn += 1) {
+        await page.mouse.wheel(0, -120);
+        await page.waitForTimeout(30);
+      }
+      await page.keyboard.up('Control');
+      expect((await firstPage.boundingBox()).width / box.width).toBeGreaterThan(2);
+      // Drawn again for its new size: the whole page finer than before, or,
+      // where that would be more than a drawing may have, the part in view.
+      await expect
+        .poll(
+          async () =>
+            (await drawnAt()) > fitted * 1.3 || (await firstPage.locator('canvas.pdf-part').count()) > 0,
+          { timeout: 30000 },
+        )
+        .toBe(true);
+      await page.getByLabel('Close PDF preview').click();
+      await expect(page.locator('.pdf-backdrop')).toHaveCount(0);
+      check(
+        `an imported PDF of ${sheets} ${sheets === 1 ? 'page' : 'pages'} is shown and drawn again when made larger`,
+      );
+      await expect(page.getByText('Saved locally', { exact: true })).toBeVisible();
+    }
+    await page.getByRole('button', { name: /Filters/ }).click();
+    await page.getByRole('button', { name: 'Clear filters', exact: true }).click();
     await page.getByLabel('Close filters').click();
   }
 
@@ -241,6 +283,23 @@ try {
   await expect(page.getByText('Saved locally', { exact: true })).toBeVisible({ timeout: 15000 });
   await expect.poll(total).toBe(before + 1);
   check('a note is created and saved');
+
+  // The filter offers the tags of the notes listed, counted by the library
+  // over the whole listing, and a tag chosen there narrows the list.
+  await page.getByLabel('Add a tag').fill('filter-check-tag');
+  await page.getByLabel('Add a tag').press('Enter');
+  await expect(page.getByText('Saved locally', { exact: true })).toBeVisible({ timeout: 15000 });
+  await page.getByRole('button', { name: /Filters/ }).click();
+  await page.getByLabel('Find a tag').fill('filter-check');
+  const checkTag = page.locator('.filter-tags-list .checkbox-label').filter({ hasText: 'filter-check-tag' });
+  await expect(checkTag.locator('small')).toHaveText('1', { timeout: 15000 });
+  await checkTag.locator('input').check();
+  await expect.poll(total).toBe(1);
+  await expect(page.locator('.filter-tags-list .checkbox-label')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Clear filters', exact: true }).click();
+  await expect.poll(total).toBe(before + 1);
+  await page.getByLabel('Close filters').click();
+  check('the filter offers the tags of the notes listed, and a tag narrows the list');
 
   // Pasted bytes travel as a raw IPC body and come back over bever:.
   const blobsBefore = blobFiles();

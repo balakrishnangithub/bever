@@ -425,6 +425,12 @@ impl Library {
         crate::search::search_notes(self, filter)
     }
 
+    /// How many notes of the listing `filter` gives have each tag, by the
+    /// tag's id. The whole listing is counted, whatever page is asked for.
+    pub fn listing_tags(&self, filter: &NoteFilter) -> Result<HashMap<String, u64>> {
+        crate::search::listing_tags(self, filter)
+    }
+
     /// Marks the beginning of an import, for [`Library::import_enex_note`]:
     /// what the records of imported notes say now, before the run adds to
     /// them.

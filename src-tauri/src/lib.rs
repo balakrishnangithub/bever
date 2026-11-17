@@ -321,7 +321,15 @@ pub fn run() {
     let builder = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_opener::init());
+        // Links are opened by `open_external_url`, which checks them. The
+        // plugin's own script for clicks on links is left out: the page
+        // may not call the plugin, so all it did was to ask, be refused,
+        // and report an error for every link clicked with a target.
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        );
     #[cfg(target_os = "android")]
     let builder = builder.plugin(tauri_plugin_deep_link::init()).plugin(
         tauri::plugin::Builder::new("bever-sync")
@@ -404,6 +412,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::bootstrap,
             commands::list_notes,
+            commands::listing_tags,
             commands::get_note,
             commands::create_note,
             commands::save_note,

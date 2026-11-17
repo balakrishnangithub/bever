@@ -7,6 +7,7 @@ import {
   isHorizontalSwipe,
   shouldToggleDrawer,
   swipeSpeed,
+  turnedUpright,
   type SwipePoint,
 } from './drawerGestures';
 
@@ -175,6 +176,21 @@ export function useDrawerGestures({
         event.currentTarget.setPointerCapture(event.pointerId);
         const element = drawer(event);
         if (element) element.style.transition = 'none';
+      }
+      // A swipe at one of the drawer's lists, begun on a slant: it went on
+      // upward or downward, so it is the list's. The drawer goes back to
+      // where it was and lets the touch go; the list moves from here on.
+      if (!current.outside && turnedUpright(deltaX, deltaY)) {
+        const element = drawer(event);
+        if (element) {
+          element.style.transition = '';
+          element.style.transform = '';
+        }
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+        gesture.current = null;
+        return;
       }
       event.preventDefault();
       current.trail.push({ x: event.clientX, time: event.timeStamp });
