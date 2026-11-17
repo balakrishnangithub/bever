@@ -186,6 +186,29 @@ for (let index = 0; index < Math.min(fillerCount, 5000); index += 1) {
   });
 }
 
+// `?demoList` adds a note that is a list to its very end, as the import from
+// Evernote stores one: the editor wants a line after a list to write in, and
+// adds it the first time anything is asked of it.
+if (new URLSearchParams(window.location.search).has('demoList')) {
+  addDemo({
+    id: 'list-to-the-end',
+    notebookId: inboxId,
+    title: 'Grains to try',
+    contentHtml:
+      '<ul><li><div>Oats</div></li><li><div>Barley</div></li></ul><div><br></div><hr><div><br></div><ul><li><div>Rye</div></li><li><div>Millet</div></li></ul>',
+    originalEnml: null,
+    plainText: 'Oats Barley Rye Millet',
+    createdAt: now - 900000,
+    updatedAt: now - 900000,
+    deletedAt: null,
+    attributes: {},
+    evernoteGuid: null,
+    tags: [],
+    resources: [],
+    revision: 1,
+  });
+}
+
 // `?demoClip` adds a note holding a web clipping, as Evernote exports one:
 // the page's own elements with inline styles inside a marked wrapper.
 if (new URLSearchParams(window.location.search).has('demoClip')) {

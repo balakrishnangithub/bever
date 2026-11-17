@@ -1,0 +1,1 @@
+A note opened from a search is no longer stored anew with today's date when nothing was written in it; nor is a note that is open for reading only.

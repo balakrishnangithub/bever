@@ -62,6 +62,24 @@ if (exportFile) {
   const summary = execFileSync(importer, [exportFile, dataDirectory], { encoding: 'utf8' });
   const match = /Imported (\d+) notes, (\d+) attachments/.exec(summary);
   imported = { notes: Number(match?.[1]), attachments: Number(match?.[2]) };
+  // And a note of the test's own that is a list to its very end, which is
+  // where the editor adds a line of its own; see the check that opens it.
+  const listExport = join(work, 'Grains.enex');
+  writeFileSync(
+    listExport,
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+      '<!DOCTYPE en-export SYSTEM "http://xml.evernote.com/pub/evernote-export4.dtd">' +
+      '<en-export export-date="20261118T000000Z" application="Evernote" version="10.0">' +
+      '<note><title>Grains to try</title>' +
+      '<created>20240111T192505Z</created><updated>20240130T141156Z</updated>' +
+      '<content><![CDATA[<?xml version="1.0" encoding="UTF-8" standalone="no"?>' +
+      '<!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd">' +
+      '<en-note><ul><li><div>Oats</div></li><li><div>Maltbarley</div></li></ul>' +
+      '<div><br/></div><hr/><div><br/></div>' +
+      '<ul><li><div>Rye</div></li><li><div>Millet</div></li></ul></en-note>]]></content></note></en-export>',
+  );
+  execFileSync(importer, [listExport, dataDirectory], { encoding: 'utf8' });
+  imported.notes += 1;
   console.log(`Imported ${imported.notes} notes and ${imported.attachments} attachments for the run.`);
 }
 
@@ -190,6 +208,18 @@ try {
   const total = async () =>
     Number((await page.locator('.notes-header h1 span').innerText()).replace(/\D/g, ''));
 
+  /** A note as the library has it, read from its file. */
+  const stored = (title) => {
+    const database = new DatabaseSync(join(dataDirectory, 'bever.db'), { readOnly: true });
+    const row = database
+      .prepare(
+        'SELECT revision, updated_at AS updated, content_html AS html, attributes_json AS attributes FROM notes WHERE title = ?',
+      )
+      .get(title);
+    database.close();
+    return { ...row };
+  };
+
   if (imported) {
     await expect(page.locator('.primary-nav .row-count')).toHaveText(imported.notes.toLocaleString());
     expect(await total()).toBe(imported.notes);
@@ -209,6 +239,26 @@ try {
     expect(loaded).toBeGreaterThanOrEqual(imported.notes);
     check('scrolling loads every note, page by page');
     await page.locator('.note-list').evaluate((list) => (list.scrollTop = 0));
+
+    // Opening a note from a search is not writing in it. The note is a list
+    // to its end: the search's marks make the editor add its empty line
+    // there, which is not the writer's and must not store the note anew.
+    const listed = stored('Grains to try');
+    expect(listed.html.trimEnd().endsWith('</ul>')).toBe(true);
+    for (const [search, marks] of [
+      ['maltbarley', 1],
+      ['intitle:"Grains to try" grains', 0],
+    ]) {
+      await page.getByLabel('Search notes').fill(search);
+      await page.getByRole('heading', { name: 'Grains to try', exact: true }).click();
+      await expect(page.locator('.note-prose li')).toHaveCount(4);
+      await expect(page.locator('.note-prose .note-find-match')).toHaveCount(marks);
+      await new Promise((done) => setTimeout(done, 2000));
+      expect(stored('Grains to try')).toEqual(listed);
+      await expect(page.locator('.discard-changes')).toHaveCount(0);
+      await page.getByLabel('Clear search').click();
+    }
+    check('a note opened from a search is not stored anew, and keeps its date');
 
     // An imported image attachment is served by the bever: protocol.
     await page.getByRole('button', { name: /Filters/ }).click();
@@ -604,16 +654,6 @@ try {
   // An imported note is stored as Evernote wrote it. Placing and moving the
   // cursor in it, a letter typed and taken away again, and a space at the
   // end of a line leave it so: to the letter, to its date, to its revision.
-  const stored = (title) => {
-    const database = new DatabaseSync(join(dataDirectory, 'bever.db'), { readOnly: true });
-    const row = database
-      .prepare(
-        'SELECT revision, updated_at AS updated, content_html AS html, attributes_json AS attributes FROM notes WHERE title = ?',
-      )
-      .get(title);
-    database.close();
-    return { ...row };
-  };
   const asImported = stored('First note');
   expect(asImported.html).toContain('<div>Hello &amp; goodbye</div>');
   await page.getByRole('heading', { name: 'First note', exact: true }).click();

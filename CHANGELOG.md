@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.3.1 — 2026-11-18
+
+A note opened from a search was sometimes stored anew, with today's date, though nothing had been written in it. Also a note opened for reading only. It no longer is.
+
+### Fixed
+
+- **A note opened from a search got a new date.** A note that ends in a list, a table, a rule or anything else that is not a line of text was stored anew when it was opened from a search: its date of change became the moment it was opened, _Discard changes_ was offered though nothing had been written, and the next synchronization sent the note to the other devices. Opened from its notebook, the same note was left alone. The cause: the editor wants an empty line after such an ending, to write in, and adds it the first time anything is asked of it. Opened from a search, the first thing asked is to mark what the search found, and that came before the editor had taken down what the note looked like as it was stored; with nothing to measure the empty line against, it was taken for writing. The note is now taken down before anything is asked of the editor. It has been so since 1.0.0.
+- **A note open for reading only could be stored.** The padlock, and the setting that opens every note read-only, kept the writer from changing a note, and not the editor: the fault above stored such a note as well. Now nothing the editor does to a note that is only read is taken for a change of it.
+
+### Compatibility
+
+- Nothing changes in how notes are kept or synchronized. A library of 1.0.0 or later is opened as it is.
+- Notes that got a new date this way keep it. Where the note was not written in since, _Note information_ lists the forms that were kept of it, the latest few, each with its date, and puts one back.
+
+### What was verified
+
+- The fault was reproduced in the browser check with the released 1.3.0 before it was repaired: a note that is a list to its end, opened from its notebook, stayed as it was; opened from a search that marks a word in it, from a search that found only its title, and read-only from a search, it was stored anew each time. With the repair, none of the four stores it, its date in the list stays, and nothing is offered to discard; a letter typed into it afterwards is stored as before. Those steps are part of the browser check now.
+- A test of the editor by itself (`RichEditor.test.tsx`) fails on the code of 1.3.0 in three of its four cases and passes now.
+- Automated: 184 tests of the Rust core and 12 of its round trips through ENEX, 27 of the native shell, 219 of the interface, and the browser check. `cargo audit` finds no vulnerability. `npm audit` finds none in what the application is made of (`npm audit --omit=dev`); among the tools that build and test it, it reports a fault published since 1.3.0 in `picomatch`, which matches file names for them, in every version there is: no repaired one exists yet, and nothing of it is in the application.
+- In the built Windows application (`npm run test:native`), with a note that is a list to its end, read from the library's file before and after: opened from a search in 1.3.0, its page was rewritten, its revision went from 1 to 2 and its date from 2024 to the moment of opening; in 1.3.1 it is the same to the letter. That check is part of the run with an export from now on. The general check passed (27 checks with an empty library, 31 with an export that holds PDFs), and so did the synchronization check against a stand-in for pCloud (`npm run test:sync`: 13 and 12).
+- The Windows program and the Android package were built from the released source.
+
+### Not verified
+
+- On a phone. The fault is in the part of Bever that is the same on Windows and Android, and was reported on both; the repair was tried in a browser and in the built Windows application, not on a phone, which was not at hand.
+- The Windows installers were built, not run.
+
 ## 1.3.0 — 2026-11-17
 
 Going back closes what was opened last, and nothing else. Lists take a swipe whichever way it begins. The filter offers the tags of the notes listed and finds a tag as its name is typed. A PDF is read page under page and made larger where it is looked at, sharp at every size. Saving a marked picture on a phone takes half a second, where it took fourteen.

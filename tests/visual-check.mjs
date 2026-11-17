@@ -1104,6 +1104,50 @@ try {
   await searching.screenshot({ path: 'test-results/bever-thumbnails-mobile.png', fullPage: true });
   await searching.close();
 
+  // Opening a note is not writing in it, from a search no more than from
+  // its notebook: the note is not stored anew, keeps its date, and there is
+  // nothing to discard. The note here is a list to its very end, where the
+  // editor adds a line of its own as soon as the search's marks are drawn.
+  for (const [how, search, readOnly] of [
+    ['from its notebook', '', false],
+    ['from a search that marks a word in it', 'barley', false],
+    ['from a search that found its title', 'grains', false],
+    ['from a search, read-only', 'barley', true],
+  ]) {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 920 } });
+    const opening = await context.newPage();
+    opening.on('pageerror', (error) => errors.push(error.message));
+    await opening.goto('http://127.0.0.1:7100/?demoList', { waitUntil: 'domcontentloaded' });
+    await opening.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+    if (readOnly) {
+      await opening.getByRole('button', { name: 'Settings & sync' }).click();
+      await opening.getByLabel('Open notes read-only; the padlock in a note unlocks it').check();
+      await opening.getByRole('button', { name: 'Close settings' }).click();
+    }
+    if (search) await opening.getByLabel('Search notes').fill(search);
+    const card = opening.locator('.note-card', { hasText: 'Grains to try' });
+    const dated = await card.locator('time').first().textContent();
+    await card.getByRole('heading').click();
+    await expect(opening.locator('.note-prose li')).toHaveCount(4);
+    await expect(opening.locator('.note-prose .note-find-match')).toHaveCount(search === 'barley' ? 1 : 0);
+    // Longer than a change waits to be saved.
+    await opening.waitForTimeout(1500);
+    await expect(
+      opening.getByText(readOnly ? 'Read-only' : 'Saved locally', { exact: true }),
+      `the note opened ${how}`,
+    ).toBeVisible();
+    // What could be discarded is offered only where the note can be written in.
+    if (readOnly) await opening.getByRole('button', { name: 'Unlock this note' }).click();
+    await expect(opening.getByRole('button', { name: 'Lock this note' })).toBeVisible();
+    await expect(opening.locator('.discard-changes'), `nothing to discard, opened ${how}`).toHaveCount(0);
+    expect(await card.locator('time').first().textContent(), `the note's date, opened ${how}`).toBe(dated);
+    // Written in, it is stored, and what was there can be had back.
+    await opening.locator('.note-prose li').first().click();
+    await opening.keyboard.type('x');
+    await expect(opening.locator('.discard-changes'), `something to discard, written ${how}`).toHaveCount(1);
+    await context.close();
+  }
+
   // A picture annotated in Evernote: its marks are separate things that can
   // be moved, reworded and removed, and new ones are stored the same way.
   const annotated = await browser.newPage({ viewport: { width: 1440, height: 920 }, deviceScale: 1 });

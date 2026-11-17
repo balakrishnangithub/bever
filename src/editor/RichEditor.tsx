@@ -140,14 +140,14 @@ export function RichEditor({
           return true;
         },
       },
-      onCreate: ({ editor: instance }) => {
-        shown.current = { html: note.contentHtml, face: faceOf(instance.state.doc) };
-      },
       // The editor changes its document for reasons that are not the
       // writer's: a keyboard takes up a word and puts it back, an empty line
       // is added to write in. Only what changes the note's face is a change
       // of the note; anything else leaves it the page that is stored.
       onUpdate: ({ editor: instance }) => {
+        // And a note that is only read is not changed at all, whatever the
+        // editor does to its document meanwhile.
+        if (!instance.isEditable) return;
         const stored = shown.current;
         onChange(stored && faceOf(instance.state.doc) === stored.face ? stored.html : noteHtml(instance));
       },
@@ -156,6 +156,19 @@ export function RichEditor({
     },
     [note.id],
   );
+
+  // What the editor was given is taken down as soon as there is an editor,
+  // and before anything below asks something of it. The editor's own word
+  // that it is ready comes too late for that: marking what a search found
+  // comes first, and to a note that ends in a list it adds the empty line
+  // the editor wants there. With nothing to measure that against, it was
+  // taken for writing, and a note opened from a search was stored anew.
+  // This effect stays the first one that touches the editor.
+  useEffect(() => {
+    if (editor && !shown.current) {
+      shown.current = { html: note.contentHtml, face: faceOf(editor.state.doc) };
+    }
+  }, [editor, note.contentHtml]);
 
   useEffect(() => {
     if (editor && editor.isEditable !== editable) editor.setEditable(editable);
