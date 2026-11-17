@@ -331,7 +331,7 @@ pub(crate) async fn import_enex(
 
 #[tauri::command]
 pub(crate) fn cancel_import(app: AppHandle) {
-    app.state::<AppState>()
+    AppState::of(&app)
         .imports
         .cancel
         .store(true, Ordering::SeqCst);
@@ -382,7 +382,7 @@ pub(crate) fn attach_bytes(
     app: AppHandle,
     request: tauri::ipc::Request<'_>,
 ) -> Result<Resource, String> {
-    let state = app.state::<AppState>();
+    let state = AppState::of(&app);
     let header = |name: &str| {
         request
             .headers()

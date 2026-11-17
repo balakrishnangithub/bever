@@ -11,7 +11,7 @@ use std::io::{Read, Seek, SeekFrom};
 use percent_encoding::percent_decode_str;
 use tauri::{
     http::{header, Request, Response, StatusCode},
-    AppHandle, Manager, UriSchemeContext, UriSchemeResponder,
+    AppHandle, UriSchemeContext, UriSchemeResponder,
 };
 
 use crate::{files::attachment_file_name, AppState};
@@ -33,7 +33,7 @@ fn respond(app: &AppHandle, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
     let reference = percent_decode_str(request.uri().path().trim_matches('/'))
         .decode_utf8_lossy()
         .into_owned();
-    let state = app.state::<AppState>();
+    let state = AppState::of(app);
     let (reference, small) = match reference.strip_prefix("thumb/") {
         Some(hash) => (hash.to_owned(), true),
         None => (reference, false),

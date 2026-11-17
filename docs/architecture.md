@@ -102,6 +102,7 @@ Saving is serialized by `draftController.ts`: one save at a time, each carrying 
 
 - One thread at a time has the database connection. A thread that panics while it has it does not take it from the others: what it had begun in a transaction is undone as the transaction is dropped, and the next operation finds the connection as it was (`db.rs`, `Shared`).
 - One application runs for one library. Started again, the one that is running comes to the front; two would each show the notes as they last read them and save over each other. A library named by `BEVER_DATA_DIR` is another application and runs beside it.
+- A request from the interface that comes before set-up has opened the library waits for it (`startup.rs`). Tauri makes the window before it runs set-up, and on Android the page loads meanwhile, so its first request can be the earlier of the two; asking Tauri for state that is not managed yet is a panic, and a panic ends the application. The state is therefore kept in a place that exists before any window, and `AppState::of` is the one way to it. When a request had to wait, the device's log says so and for how long.
 - A part of the interface that fails to draw is replaced by a message (`ErrorBoundary.tsx`): a note that cannot be drawn leaves the lists usable, and a failure of the whole offers to start the interface again. The notes are not touched by either.
 - The editor's own guard against a change made by mistake is in "Persistence invariants", 10, and in `draftController.ts`, which has the note kept before its first save.
 

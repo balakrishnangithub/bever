@@ -1,0 +1,1 @@
+Bever no longer closes a moment after it is opened, which happened most often the first time after the device had been restarted.

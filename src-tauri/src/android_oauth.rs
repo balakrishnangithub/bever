@@ -7,7 +7,7 @@ use bever_core::{
     error::{BeverError, Result as BeverResult},
     Library,
 };
-use tauri::{App, AppHandle, Emitter, Manager};
+use tauri::{App, AppHandle, Emitter};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_opener::OpenerExt;
 use url::Url;
@@ -63,7 +63,7 @@ fn dispatch(app: AppHandle, url: Url) {
 }
 
 fn complete(app: &AppHandle, url: &Url) -> BeverResult<Option<PCloudStatus>> {
-    let library = &app.state::<AppState>().library;
+    let library = &AppState::of(app).library;
     let Some(expected_state) = library
         .setting("pcloud_oauth_state")?
         .filter(|state| !state.is_empty())

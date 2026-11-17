@@ -24,7 +24,7 @@ use bever_core::{
 use serde::Serialize;
 use tauri::AppHandle;
 #[cfg(not(target_os = "android"))]
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 #[cfg(not(target_os = "android"))]
 use tauri_plugin_opener::OpenerExt;
 use url::Url;
@@ -141,7 +141,7 @@ pub(crate) fn pcloud_authorization_url(expected_state: &str, redirect_uri: &str)
 #[cfg(not(target_os = "android"))]
 #[tauri::command]
 pub(crate) async fn connect_pcloud(app: AppHandle) -> Result<PCloudStatus, String> {
-    let cancelled = Arc::clone(&app.state::<AppState>().oauth_cancelled);
+    let cancelled = Arc::clone(&AppState::of(&app).oauth_cancelled);
     let status = blocking(&app, move |app, state| {
         cancelled.store(false, Ordering::SeqCst);
         let server = bind_loopback()?;

@@ -17,7 +17,7 @@ use bever_core::{
     Library,
 };
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 use crate::{blocking, commands::ocr_enabled, AppState};
 
@@ -65,7 +65,7 @@ impl OcrWorker {
     }
 
     fn run(&self, app: &AppHandle) {
-        let state = app.state::<AppState>();
+        let state = AppState::of(app);
         let library = &state.library;
         let has_work = |library: &Library| {
             ocr_enabled(library).unwrap_or(false) && library.ocr_pending().unwrap_or(0) > 0

@@ -15,6 +15,7 @@ mod files;
 mod ocr_worker;
 mod pcloud_auth;
 mod protocol;
+mod startup;
 mod sync_controller;
 mod sync_platform;
 
@@ -30,9 +31,10 @@ use bever_core::{
 };
 use files::ImportState;
 use ocr_worker::OcrWorker;
+use startup::Startup;
 use sync_controller::{RunEnd, SyncController, SyncStatus};
 use sync_platform::SyncPlatform;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager};
 
 pub(crate) struct AppState {
     pub(crate) library: Arc<Library>,
@@ -48,6 +50,14 @@ pub(crate) struct AppState {
     /// existing worker finishes. Opening the window clears it.
     #[cfg_attr(any(target_os = "android", target_os = "ios"), allow(dead_code))]
     pub(crate) exit_after_sync: AtomicBool,
+}
+
+impl AppState {
+    /// The application's state, waited for when set-up is still opening the
+    /// library; see [`Startup`]. This is the one way to it.
+    pub(crate) fn of(app: &AppHandle) -> &AppState {
+        app.state::<Startup<AppState>>().inner().wait()
+    }
 }
 
 /// How long a synchronization that was stopped in order to quit is given to
@@ -68,13 +78,10 @@ where
     F: FnOnce(&AppHandle, &AppState) -> BeverResult<T> + Send + 'static,
 {
     let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        work(&app, state.inner())
-    })
-    .await
-    .map_err(|error| error.to_string())?
-    .map_err(|error| error.to_string())
+    tauri::async_runtime::spawn_blocking(move || work(&app, AppState::of(&app)))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
 }
 
 /// What this library synchronizes with, stopped by `cancel`. pCloud is the
@@ -109,7 +116,7 @@ fn show_in_tray(app: &AppHandle, running: bool) {
 fn show_in_tray(_app: &AppHandle, _running: bool) {}
 
 fn finish_sync_run(app: &AppHandle, run_id: u64, end: RunEnd) {
-    let state = app.state::<AppState>();
+    let state = AppState::of(app);
     let Some(status) = state.sync.finish(run_id, end) else {
         return;
     };
@@ -129,11 +136,7 @@ fn finish_sync_run(app: &AppHandle, run_id: u64, end: RunEnd) {
         let _ = app.clone().run_on_main_thread(move || {
             // Recheck on the UI thread: Open Bever may have cancelled exit
             // after the worker completed but before this callback ran.
-            if app
-                .state::<AppState>()
-                .exit_after_sync
-                .load(Ordering::Acquire)
-            {
+            if AppState::of(&app).exit_after_sync.load(Ordering::Acquire) {
                 app.exit(0);
             }
         });
@@ -142,7 +145,7 @@ fn finish_sync_run(app: &AppHandle, run_id: u64, end: RunEnd) {
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn restore_main_window(app: &AppHandle) {
-    app.state::<AppState>()
+    AppState::of(app)
         .exit_after_sync
         .store(false, Ordering::Release);
     if let Some(window) = app.get_webview_window("main") {
@@ -158,7 +161,7 @@ fn restore_main_window(app: &AppHandle) {
 /// finish, which may be hours away.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn quit_now(app: &AppHandle) {
-    let state = app.state::<AppState>();
+    let state = AppState::of(app);
     if !state.sync.is_running() {
         app.exit(0);
         return;
@@ -178,11 +181,7 @@ fn quit_now(app: &AppHandle) {
         std::thread::sleep(QUIT_GRACE);
         let _ = app.clone().run_on_main_thread(move || {
             // Unless Bever was opened again meanwhile.
-            if app
-                .state::<AppState>()
-                .exit_after_sync
-                .load(Ordering::Acquire)
-            {
+            if AppState::of(&app).exit_after_sync.load(Ordering::Acquire) {
                 app.exit(0);
             }
         });
@@ -190,15 +189,15 @@ fn quit_now(app: &AppHandle) {
 }
 
 #[tauri::command]
-fn sync_status(state: State<'_, AppState>) -> SyncStatus {
-    state.sync.status()
+fn sync_status(app: AppHandle) -> SyncStatus {
+    AppState::of(&app).sync.status()
 }
 
 /// Stops the synchronization that is running. What it has transferred
 /// stays, and the next run goes on from there.
 #[tauri::command]
 fn stop_sync(app: AppHandle) -> SyncStatus {
-    let state = app.state::<AppState>();
+    let state = AppState::of(&app);
     if let Some(status) = state.sync.stop() {
         publish_sync_status(&app, &status);
     }
@@ -216,13 +215,13 @@ async fn sync_history(app: AppHandle) -> Result<Vec<SyncRun>, String> {
 async fn sync_now(app: AppHandle) -> Result<SyncStatus, String> {
     // Check the sign-in before reserving a run, so that a missing token is
     // reported at once. A run that is already going needs no check.
-    if !app.state::<AppState>().sync.is_running() {
+    if !AppState::of(&app).sync.is_running() {
         blocking(&app, |_, state| {
             remote_store(&state.library, Cancel::new()).map(|_| ())
         })
         .await?;
     }
-    let state = app.state::<AppState>();
+    let state = AppState::of(&app);
     let Some((run_id, cancel)) = state.sync.begin() else {
         // Another caller won the race; report the run that is in progress.
         return Ok(state.sync.status());
@@ -251,7 +250,7 @@ async fn sync_now(app: AppHandle) -> Result<SyncStatus, String> {
         };
         let result = remote_store(&library, cancel).and_then(|remote| {
             sync_with_remote(&library, &*remote, &options, |progress: SyncProgress| {
-                let state = worker_app.state::<AppState>();
+                let state = AppState::of(&worker_app);
                 state.platform.progress(&progress);
                 if let Some(status) = state.sync.update(run_id, progress) {
                     publish_sync_status(&worker_app, &status);
@@ -274,7 +273,7 @@ async fn sync_now(app: AppHandle) -> Result<SyncStatus, String> {
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 #[tauri::command]
 fn finish_close(app: AppHandle, window: tauri::Window) {
-    let state = app.state::<AppState>();
+    let state = AppState::of(&app);
     if should_defer_close(window.label(), state.sync.is_running()) {
         state.exit_after_sync.store(true, Ordering::Release);
         let _ = window.hide();
@@ -334,6 +333,8 @@ pub fn run() {
     );
 
     builder
+        // Before any window: the page of one may ask before set-up is done.
+        .manage(Startup::<AppState>::default())
         .register_asynchronous_uri_scheme_protocol("bever", protocol::handle)
         .setup(|app| {
             let library = Arc::new(Library::open(data_directory(app)?)?);
@@ -344,7 +345,7 @@ pub fn run() {
             let platform = Arc::clone(&*app.state::<Arc<SyncPlatform>>());
             #[cfg(not(target_os = "android"))]
             let platform = Arc::new(SyncPlatform);
-            app.manage(AppState {
+            app.state::<Startup<AppState>>().open(AppState {
                 library,
                 sync: Arc::new(SyncController::default()),
                 platform,
@@ -356,7 +357,7 @@ pub fn run() {
             #[cfg(target_os = "android")]
             android_oauth::register(app)?;
             // Continue recognising images queued before the last exit.
-            app.state::<AppState>().ocr.wake(app.handle());
+            AppState::of(app.handle()).ocr.wake(app.handle());
 
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
@@ -392,11 +393,10 @@ pub fn run() {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             if let tauri::WindowEvent::CloseRequested { api, .. } = _event {
                 let app = _window.app_handle();
-                if should_defer_close(_window.label(), app.state::<AppState>().sync.is_running()) {
+                let state = AppState::of(app);
+                if should_defer_close(_window.label(), state.sync.is_running()) {
                     api.prevent_close();
-                    app.state::<AppState>()
-                        .exit_after_sync
-                        .store(true, Ordering::Release);
+                    state.exit_after_sync.store(true, Ordering::Release);
                     let _ = _window.hide();
                 }
             }

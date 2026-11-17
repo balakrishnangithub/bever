@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.2.1 — 2026-11-17
+
+On Android, Bever sometimes closed a moment after it was opened, most often the first time after the device had been restarted, and Android said nothing about it. It no longer does.
+
+### Fixed
+
+- **Bever closing as it starts, on Android.** The window is made before the library is opened, and on Android its page loads meanwhile, on other threads. When the page was ready first, its first request found no library to ask, and that ended the application: two or three seconds after it was opened, with the loading screen showing. Android says nothing about an application that ends this way once. It happened when opening the library took longest, which is after the device was restarted, and now and then otherwise. A request that comes early now waits for the library, some tenths of a second, and is answered. Windows was not affected: there the page cannot load before the library is open.
+
+### Compatibility
+
+- Nothing changes in how notes are kept or synchronized. A library of 1.0.0 or later is opened as it is.
+
+### What was verified
+
+- **On the phone where it happened** (a Samsung phone with Android 17, with a library on it). Android's own record of 1.2.0 ending had the same reason each of five times, two to three seconds after the start: the state was asked for before it was there. Started from nothing twelve times, 1.2.0 ended once. The corrected program stayed in 30 of 30 such starts, and this version as released in 15 of 15. The first start after the phone was restarted is the one that counts: a request came 434 ms before the library was open, waited, and was answered, and Bever stayed open. No report of a crash was added in any of these.
+- Automated: 183 tests of the Rust core and 12 of its round trips through ENEX, 27 of the native shell, two of them for a request that comes before set-up is done, 180 of the interface, and the browser check. `cargo audit` and `npm audit` find no vulnerability.
+- The built Windows application passed its general check (`npm run test:native`: 26 checks with an empty library, 30 with an export of 171 notes) and the synchronization check against a stand-in for pCloud (`npm run test:sync`: 13 and 12).
+- The Windows program and the Android package were built from the released source.
+
+### Not verified
+
+- One phone. No other Android device and no emulator was tried.
+- pCloud itself was not reached with this version; nothing in how Bever synchronizes was changed.
+
 ## 1.2.0 — 2026-11-16
 
 A note was stored anew, and given a new date, when no more was done to it than placing the cursor in it. A note is now stored only when what can be seen of it has changed. Besides that, a note can be made larger to look at, pinned to the top of its notebook, and shown in lists without a picture; and an import from Evernote brings the pins and the thumbnail choices Evernote has.
