@@ -20,6 +20,7 @@ vi.mock('../lib/api', () => ({
     bootstrap: vi.fn(),
     listNotes: vi.fn(),
     getNote: vi.fn(),
+    noteTitles: vi.fn(),
     saveNote: vi.fn(),
     setNotesTrashed: vi.fn(),
     deleteNotebook: vi.fn(),
@@ -86,10 +87,13 @@ describe('library store', () => {
       filter: { ...emptyFilter },
       error: null,
       notice: null,
-      places: [{ view: viewOf(emptyFilter), noteId: null, screen: null }],
+      places: [
+        { view: viewOf(emptyFilter), noteId: null, screen: null, reading: false, refined: false, find: '' },
+      ],
       placeAt: 0,
       screen: null,
-      steps: 0,
+      screenQuery: '',
+      reading: false,
     });
     localStorage.clear();
   });
@@ -359,7 +363,6 @@ describe('library store', () => {
     // There is nothing before the beginning.
     await store.goBack();
     expect(useLibraryStore.getState().placeAt).toBe(0);
-    expect(useLibraryStore.getState().steps).toBe(4);
 
     await store.goForward();
     await store.goForward();
@@ -394,16 +397,115 @@ describe('library store', () => {
     expect(useLibraryStore.getState().screen).toBe('notebooks');
   });
 
-  it('counts a search that is typed as one place, not many', async () => {
+  it('counts a search that is typed as one step on from the listing, not many', async () => {
     libraryOf(3);
     vi.mocked(api.getNote).mockImplementation((id: string) => Promise.resolve(note(id)));
     const store = useLibraryStore.getState();
+    await store.openView({ notebookId: 'work' });
     for (const typed of ['t', 'te', 'tea']) store.setQuery(typed);
-    expect(useLibraryStore.getState().places).toHaveLength(1);
+    expect(useLibraryStore.getState().places).toHaveLength(3);
     await store.selectNote('found');
+    expect(useLibraryStore.getState().places).toHaveLength(4);
+    // Back from the note to what was found, from there to the notebook
+    // whole, and from there to where one began.
+    const at = () => {
+      const state = useLibraryStore.getState();
+      return [state.filter.notebookId, state.filter.query, state.selectedNote?.id ?? null, state.reading];
+    };
+    expect(at()).toEqual(['work', 'tea', 'found', true]);
+    await store.goBack();
+    expect(at()).toEqual(['work', 'tea', null, false]);
+    await store.goBack();
+    expect(at()).toEqual(['work', '', null, false]);
+    await store.goBack();
+    expect(at()).toEqual([null, '', null, false]);
+    expect(useLibraryStore.getState().placeAt).toBe(0);
+  });
+
+  it('goes back to the listing when its search is cleared, and makes a step of a filter as of a search', async () => {
+    libraryOf(3);
+    const store = useLibraryStore.getState();
+    store.setQuery('tea');
+    expect([useLibraryStore.getState().placeAt, useLibraryStore.getState().places.length]).toEqual([1, 2]);
+    store.setQuery('');
+    expect([useLibraryStore.getState().placeAt, useLibraryStore.getState().places.length]).toEqual([0, 2]);
+    // Searching is working on the list: it is in front, whatever note is open.
+    useLibraryStore.setState({ reading: true });
+    store.setQuery('tea');
+    expect(useLibraryStore.getState().reading).toBe(false);
+    store.setQuery('');
+    await store.setFilter({ contains: 'pdf' });
+    await store.setFilter({ contains: 'pdf', createdFrom: 5 });
+    expect([useLibraryStore.getState().placeAt, useLibraryStore.getState().places.length]).toEqual([1, 2]);
+    // The order of the list is no place at all.
+    await store.setFilter({ sort: 'titleAsc' });
     expect(useLibraryStore.getState().places).toHaveLength(2);
     await store.goBack();
-    expect(useLibraryStore.getState().filter.query).toBe('tea');
-    expect(useLibraryStore.getState().selectedNote).toBeNull();
+    expect(useLibraryStore.getState().filter.contains).toBeNull();
+  });
+
+  it('leaves the open note for the list it was opened from, and goes back a note at a time', async () => {
+    libraryOf(3);
+    vi.mocked(api.getNote).mockImplementation((id: string) => Promise.resolve(note(id)));
+    const store = useLibraryStore.getState();
+    const at = () => {
+      const state = useLibraryStore.getState();
+      return [state.selectedNote?.id ?? null, state.reading, state.placeAt];
+    };
+    await store.selectNote('a');
+    // A link in it leads to another note.
+    await store.selectNote('b');
+    expect(at()).toEqual(['b', true, 2]);
+    // Back is the note the link was in.
+    await store.goBack();
+    expect(at()).toEqual(['a', true, 1]);
+    await store.goForward();
+    // The arrow in the note is the list, past both, and both stay ahead.
+    await store.closeNote();
+    expect(at()).toEqual([null, false, 0]);
+    expect(useLibraryStore.getState().places).toHaveLength(3);
+    // With no note in front there is nothing to leave.
+    await store.closeNote();
+    expect(at()).toEqual([null, false, 0]);
+    // Another listing puts the list in front, with the note still open beside it.
+    await store.selectNote('a');
+    await store.openView({ notebookId: 'work' });
+    expect(at()).toEqual(['a', false, 2]);
+  });
+
+  it('does not keep the place of a note that was deleted beside the list it was opened from', async () => {
+    libraryOf(3);
+    vi.mocked(api.getNote).mockImplementation((id: string) => Promise.resolve(note(id)));
+    vi.mocked(api.setNotesTrashed).mockResolvedValue(1);
+    const store = useLibraryStore.getState();
+    await store.selectNote('a');
+    await store.trashNotes(['a']);
+    const state = useLibraryStore.getState();
+    expect([state.placeAt, state.places.length, state.reading]).toEqual([0, 1, false]);
+  });
+
+  it('makes a step of a search of the notebooks, and leaves the screen in one', async () => {
+    libraryOf(3);
+    const store = useLibraryStore.getState();
+    const at = () => {
+      const state = useLibraryStore.getState();
+      return [state.screen, state.screenQuery, state.filter.notebookId, state.placeAt];
+    };
+    store.showScreen('notebooks');
+    for (const typed of ['w', 'wo']) store.setScreenQuery(typed);
+    expect(at()).toEqual(['notebooks', 'wo', null, 2]);
+    // A notebook that was found is opened; back from it is what was found.
+    await store.openView({ notebookId: 'work' });
+    await store.goBack();
+    expect(at()).toEqual(['notebooks', 'wo', null, 2]);
+    await store.goBack();
+    expect(at()).toEqual(['notebooks', '', null, 1]);
+    await store.goForward();
+    // Leaving the screen from its search is one step, to where it was opened from.
+    store.showScreen(null);
+    expect(at()).toEqual([null, '', null, 0]);
+    // A screen gone to anew is searched for nothing.
+    store.showScreen('notebooks');
+    expect(at()).toEqual(['notebooks', '', null, 1]);
   });
 });

@@ -2765,12 +2765,22 @@ try {
     await ways.keyboard.press('Escape');
     await ways.setViewportSize({ width: 390, height: 844 });
     await ways.waitForTimeout(400);
+    // The note that was open beside the list is in front of it in a window
+    // this narrow; its arrow leads to the list it is in.
+    await expect(ways.locator('.app-shell')).toHaveClass(/mobile-has-note/);
+    await ways.getByRole('button', { name: 'Back to notes' }).click();
+    await expect(ways.locator('.app-shell')).not.toHaveClass(/mobile-has-note/);
     await ways.getByRole('heading', { name: 'Bring your notes along', exact: true }).click();
     await expect(ways.getByRole('button', { name: 'Back to notes' })).toBeVisible();
     await playing();
     expect(await stopped()).toBe(false);
     await ways.getByRole('button', { name: 'Back to notes' }).click();
-    await expect.poll(stopped).toBe(true);
+    // Left for the list, the note is stopped, or is off the page with
+    // what played in it: the list is a place at which it was not open.
+    await expect
+      .poll(async () => (await stopped()) || (await ways.locator('.editor-panel .stand-in').count()) === 0)
+      .toBe(true);
+    await expect(ways.locator('.app-shell')).not.toHaveClass(/mobile-has-note/);
     await ways.setViewportSize({ width: 1440, height: 920 });
 
     // The order chosen for a list is this device's: it is there after a
@@ -3215,11 +3225,15 @@ try {
     await expect(walk.locator('.pdf-backdrop')).toHaveCount(0);
     await goBack();
     await expect(shellOf).not.toHaveClass(/mobile-has-note/);
-    await expect.poll(open).toBe(0);
+    // The search the note was found by is where one is, a step on from the
+    // list whole; cleared, it is that step back.
+    await expect.poll(open).toBe(1);
+    await expect(walk.getByLabel('Search notes')).toHaveValue('Local attachment preview');
 
     // The editor of a picture: a menu in it first, and a text being written;
     // with nothing changed it closes; with a mark made it saves and closes.
     await walk.getByLabel('Clear search').tap();
+    await expect.poll(open).toBe(0);
     await walk.getByRole('heading', { name: 'A picture with annotations' }).tap();
     const annotate = async () => {
       // A picture that was just saved is still the one selected, with its
@@ -3363,6 +3377,328 @@ try {
     await press(sized.getByLabel('Close PDF preview'));
     await expect(sized.locator('.pdf-backdrop')).toHaveCount(0);
     await context.close();
+  }
+
+  // Going back to where one was, on a phone: a notebook chosen on the
+  // screen of notebooks, a search in it, a note that was found. Back leaves
+  // them in the order they were gone to, and the application only when
+  // there is nowhere left to go back to.
+  {
+    const context = await browser.newContext({
+      viewport: { width: 412, height: 915 },
+      deviceScaleFactor: 2,
+      hasTouch: true,
+      isMobile: true,
+    });
+    const way = await context.newPage();
+    way.on('pageerror', (error) => errors.push(error.message));
+    way.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    await way.goto('http://127.0.0.1:7100/', { waitUntil: 'domcontentloaded' });
+    await way.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+    const goBack = () => way.evaluate(() => window.history.back());
+    /** How many steps back the history has. */
+    const behind = () => way.evaluate(() => window.history.state?.depth ?? 0);
+    const shellOf = way.locator('.app-shell');
+    const drawerOf = way.locator('.sidebar');
+    const listed = way.locator('.notes-header h1');
+    const search = way.getByLabel('Search notes');
+    const notebooks = way.getByRole('region', { name: 'Notebooks', exact: true });
+    const openDrawer = async () => {
+      await way.getByRole('button', { name: 'Open navigation' }).tap();
+      await expect.poll(async () => (await drawerOf.boundingBox()).x).toBeGreaterThanOrEqual(0);
+    };
+
+    expect(await behind()).toBe(0);
+    await openDrawer();
+    await drawerOf.getByRole('button', { name: 'Notebooks', exact: true }).tap();
+    await expect(notebooks).toBeVisible();
+    // What a search of the notebooks finds can be unfolded: a stack, to the
+    // notebooks in it.
+    await notebooks.getByLabel('Find notebooks').fill('learn');
+    await expect(notebooks.locator('.organizer-name')).toHaveText(['Learning']);
+    await notebooks.getByRole('button', { name: 'Expand Learning', exact: true }).tap();
+    await expect(notebooks.locator('.organizer-name')).toHaveText(['Learning', 'Reading']);
+    await way.screenshot({ path: 'test-results/bever-found-stack.png' });
+    await notebooks.locator('.organizer-row', { hasText: 'Reading' }).locator('.organizer-open').tap();
+    await expect(notebooks).toHaveCount(0);
+    await expect(listed).toContainText('Reading');
+    await search.fill('lossless');
+    await expect(way.locator('.note-card')).toHaveCount(1);
+    await way.locator('.note-card .note-open').tap();
+    await expect(shellOf).toHaveClass(/mobile-has-note/);
+    await expect.poll(behind).toBe(5);
+
+    // Back: what was found, the notebook whole, what the screen had found
+    // (the stack unfolded as it was left), the screen whole, all notes.
+    await goBack();
+    await expect(shellOf).not.toHaveClass(/mobile-has-note/);
+    await expect(search).toHaveValue('lossless');
+    await expect(listed).toContainText('Reading');
+    await goBack();
+    await expect(search).toHaveValue('');
+    await expect(listed).toContainText('Reading');
+    await expect(way.locator('.note-card')).toHaveCount(2);
+    await goBack();
+    await expect(notebooks).toBeVisible();
+    await expect(notebooks.getByLabel('Find notebooks')).toHaveValue('learn');
+    await expect(notebooks.locator('.organizer-name')).toHaveText(['Learning', 'Reading']);
+    await goBack();
+    await expect(notebooks.getByLabel('Find notebooks')).toHaveValue('');
+    await goBack();
+    await expect(notebooks).toHaveCount(0);
+    await expect(listed).toContainText('All notes');
+    await expect.poll(behind).toBe(0);
+
+    // By the drawer, with nothing between: the notebook, a search in it.
+    await openDrawer();
+    await drawerOf.getByRole('button', { name: /^Reading/ }).tap();
+    await expect(listed).toContainText('Reading');
+    await expect(drawerOf).not.toHaveClass(/is-open/);
+    await search.fill('lossless');
+    await expect(way.locator('.note-card')).toHaveCount(1);
+    await expect.poll(behind).toBe(2);
+    await goBack();
+    await expect(search).toHaveValue('');
+    await expect(listed).toContainText('Reading');
+    await goBack();
+    await expect(listed).toContainText('All notes');
+    await expect.poll(behind).toBe(0);
+    // A search cleared by its own button is a step back too: nothing is
+    // left behind. The field is touched before it is typed into, as it is
+    // by a person: a step is made in answer to a touch, and to nothing else.
+    await search.tap();
+    await search.fill('lossless');
+    await expect.poll(behind).toBe(1);
+    await way.getByLabel('Clear search').tap();
+    await expect.poll(behind).toBe(0);
+
+    // Notes ticked in the list, and one of them opened: the note covers
+    // them, and is what Back leaves first.
+    await way.getByLabel('Select Welcome to Bever', { exact: true }).check();
+    await way.locator('.note-card', { hasText: 'Bring your notes along' }).locator('.note-open').tap();
+    await expect(shellOf).toHaveClass(/mobile-has-note/);
+    await goBack();
+    await expect(shellOf).not.toHaveClass(/mobile-has-note/);
+    await expect(way.locator('.bulk-toolbar')).toBeVisible();
+    await goBack();
+    await expect(way.locator('.bulk-toolbar')).toHaveCount(0);
+    await expect.poll(behind).toBe(0);
+
+    // A filter chosen in the panel of filters: the panel is over the list
+    // still, and closes first; then the list is whole again.
+    await way.getByRole('button', { name: /Filters/ }).tap();
+    await way.locator('.filter-panel select').first().selectOption('links');
+    await expect(way.locator('.notes-tools button.active')).toHaveCount(1);
+    await goBack();
+    await expect(way.locator('.filter-panel')).toHaveCount(0);
+    await expect(way.locator('.notes-tools button.active')).toHaveCount(1);
+    await goBack();
+    await expect(way.locator('.notes-tools button.active')).toHaveCount(0);
+    await expect.poll(behind).toBe(0);
+
+    // The arrow in a note is the list, however many notes links led through.
+    await way.goto('http://127.0.0.1:7100/?demoLinks', { waitUntil: 'domcontentloaded' });
+    await way.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+    await way.evaluate(() => localStorage.setItem('bever.openReadOnly', 'on'));
+    await way.reload({ waitUntil: 'domcontentloaded' });
+    await way.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+    await way.locator('.note-card', { hasText: 'Links to notes' }).locator('.note-open').tap();
+    await expect(way.getByLabel('Note title')).toHaveValue('Links to notes');
+    await way.locator('.note-prose a').nth(1).tap();
+    await expect(way.getByLabel('Note title')).toHaveValue('Runny nose, day two');
+    await way.locator('.note-prose a').first().tap();
+    await expect(way.getByLabel('Note title')).toHaveValue('Links to notes');
+    await expect.poll(behind).toBe(3);
+    await way.getByLabel('Back to notes').tap();
+    await expect(shellOf).not.toHaveClass(/mobile-has-note/);
+    await expect.poll(behind).toBe(0);
+    await context.close();
+  }
+
+  // Links to other notes, of every kind there is: read only on a phone, by
+  // touch, and in a note that is written in, by the bubble and by Ctrl.
+  for (const [name, viewport, touch] of [
+    ['a phone', { width: 412, height: 915 }, true],
+    ['a wide window', { width: 1360, height: 900 }, false],
+  ]) {
+    const context = await browser.newContext({ viewport, hasTouch: touch, isMobile: touch });
+    const linked = await context.newPage();
+    linked.on('pageerror', (error) => errors.push(error.message));
+    linked.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    // A link is followed by Bever, never by the web view.
+    linked.on('framenavigated', (frame) => {
+      if (frame === linked.mainFrame() && !frame.url().startsWith('http://127.0.0.1:7100/')) {
+        errors.push(`${name}: the page went to ${frame.url()}`);
+      }
+    });
+    await linked.goto('http://127.0.0.1:7100/?demoLinks', { waitUntil: 'domcontentloaded' });
+    await linked.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+    if (touch) {
+      await linked.evaluate(() => localStorage.setItem('bever.openReadOnly', 'on'));
+      await linked.reload({ waitUntil: 'domcontentloaded' });
+      await linked.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+    }
+    const press = (locator) => (touch ? locator.tap() : locator.click());
+    const goBack = () =>
+      touch ? linked.evaluate(() => window.history.back()) : linked.keyboard.press('Alt+ArrowLeft');
+    const title = linked.getByLabel('Note title');
+    const links = linked.locator('.note-prose a');
+    const said = linked.locator('.toast:not(.error-toast)');
+    const search = linked.getByLabel('Search notes');
+    /** Follows the link with this number: by a touch, or by the bubble a click brings. */
+    const follow = async (index) => {
+      await press(links.nth(index));
+      if (!touch) await linked.locator('.link-bubble button').first().click();
+    };
+    await press(linked.locator('.note-card', { hasText: 'Links to notes' }).locator('.note-open'));
+    await expect(title).toHaveValue('Links to notes');
+    // A link that says only the address of its note is shown by the note's
+    // title; one whose note is not in the library says what it says.
+    await expect(links).toHaveText([
+      'the welcome note',
+      'Runny nose, day two',
+      'this note',
+      'a note thrown away',
+      'a note that is gone',
+      'Welcome to Bever',
+      /^evernote:\/\/\/view\/123456\/s12\/9999/,
+      'Lossless ENEX import',
+      'an example',
+    ]);
+    await linked.screenshot({ path: `test-results/bever-links-${touch ? 'phone' : 'wide'}.png` });
+
+    // To a note, by words and by its address; Back is the note the link is in.
+    for (const [index, target] of [
+      [0, 'Welcome to Bever'],
+      [1, 'Runny nose, day two'],
+    ]) {
+      await follow(index);
+      await expect(title, `${name}: link ${index}`).toHaveValue(target);
+      await goBack();
+      await expect(title, `${name}: back from link ${index}`).toHaveValue('Links to notes');
+    }
+    // To itself: it is where one is.
+    await follow(2);
+    await expect(title).toHaveValue('Links to notes');
+    await expect(linked.locator('.toast')).toHaveCount(0);
+    // To a note in the trash: it is opened, and says where it is.
+    await follow(3);
+    await expect(title).toHaveValue('Thrown away');
+    await expect(linked.locator('.save-status')).toContainText('In Trash');
+    await goBack();
+    await expect(title).toHaveValue('Links to notes');
+    // To a note that is gone: said in words, and nothing else happens.
+    await follow(4);
+    await expect(said).toContainText('not in your library any more');
+    await expect(linked.locator('.error-toast')).toHaveCount(0);
+    await expect(title).toHaveValue('Links to notes');
+    await said.getByLabel('Dismiss').click();
+    // Evernote's link to a note that was never imported: its words are
+    // looked for among the titles, and Back is the note again.
+    for (const [index, words] of [
+      [5, 'Welcome to Bever'],
+      [7, 'Lossless ENEX import'],
+    ]) {
+      await follow(index);
+      await expect(said).toContainText('not in your library under that title');
+      await expect(search, `${name}: link ${index}`).toHaveValue(`intitle:"${words}"`);
+      await said.getByLabel('Dismiss').click();
+      await goBack();
+      await expect(search).toHaveValue('');
+      await expect(title).toHaveValue('Links to notes');
+      if (touch) await expect(linked.locator('.app-shell')).toHaveClass(/mobile-has-note/);
+    }
+    // One that says only its address names nothing to look for.
+    await follow(6);
+    await expect(said).toContainText('an Evernote note that is not in your library.');
+    await expect(search).toHaveValue('');
+    await expect(title).toHaveValue('Links to notes');
+    await said.getByLabel('Dismiss').click();
+
+    if (!touch) {
+      // Written in, the note is stored; its link goes on being shown by the
+      // title, here and when the note is come back to, and Ctrl follows it.
+      await linked.locator('.note-prose').click({ position: { x: 5, y: 5 } });
+      await linked.keyboard.press('Control+End');
+      await linked.keyboard.type(' More words.');
+      await expect(linked.getByText('Saved locally', { exact: true })).toBeVisible({ timeout: 10000 });
+      await expect(links.nth(1)).toHaveText('Runny nose, day two');
+      await links.nth(1).click({ modifiers: ['Control'] });
+      await expect(title).toHaveValue('Runny nose, day two');
+      await goBack();
+      await expect(title).toHaveValue('Links to notes');
+      await expect(linked.locator('.note-prose')).toContainText('More words.');
+      // What was stored says the address still: read again, it is shown by
+      // the title, which only a link that says an address is.
+      await expect(links.nth(1)).toHaveText('Runny nose, day two');
+      await expect(linked.locator('.note-prose')).not.toContainText('evernote:///view/123456/s12/0a1b');
+      // The note it leads to is renamed: the link says the new name when
+      // the note it is in is next opened.
+      await links.nth(1).click({ modifiers: ['Control'] });
+      await expect(title).toHaveValue('Runny nose, day two');
+      await title.fill('Runny nose, day three');
+      await expect(linked.locator('.note-card', { hasText: 'Runny nose, day three' })).toBeVisible({
+        timeout: 10000,
+      });
+      await goBack();
+      await expect(title).toHaveValue('Links to notes');
+      await expect(links.nth(1)).toHaveText('Runny nose, day three');
+    }
+    await context.close();
+  }
+
+  // What a search of the tags finds can be unfolded, wide: a tag, to the
+  // tags inside it; and the search is a step of its own.
+  {
+    const found = await browser.newPage({ viewport: { width: 1360, height: 900 } });
+    found.on('pageerror', (error) => errors.push(error.message));
+    found.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    await found.goto('http://127.0.0.1:7100/', { waitUntil: 'domcontentloaded' });
+    await found.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+    const tags = found.getByRole('region', { name: 'Tags', exact: true });
+    await found.locator('.sidebar').getByRole('button', { name: 'Tags', exact: true }).click();
+    await tags.getByLabel('Find tags').fill('course');
+    await expect(tags.locator('.organizer-name')).toHaveText([
+      'Course',
+      'course | 1 | 1 First lesson',
+      'course | 1 Introduction',
+      'course | 2 Equations',
+      'course | 10 Review',
+    ]);
+    await tags.getByRole('button', { name: 'Expand Course', exact: true }).click();
+    await expect(tags.locator('.organizer-name')).toHaveText([
+      'Course',
+      'course | 1 Introduction',
+      'course | 2 Equations',
+      'course | 10 Review',
+      'course | 1 | 1 First lesson',
+      'course | 1 Introduction',
+      'course | 2 Equations',
+      'course | 10 Review',
+    ]);
+    // A tag found inside the one unfolded unfolds in its turn.
+    await tags.getByRole('button', { name: 'Expand course | 1 Introduction', exact: true }).first().click();
+    await expect(tags.locator('.organizer-name').nth(2)).toHaveText('course | 1 | 1 First lesson');
+    await found.screenshot({ path: 'test-results/bever-found-tags.png' });
+    // Back by the keys: the screen whole, then where it was opened from.
+    await found.keyboard.press('Alt+ArrowLeft');
+    await expect(tags.getByLabel('Find tags')).toHaveValue('');
+    await found.keyboard.press('Alt+ArrowLeft');
+    await expect(tags).toHaveCount(0);
+    // And the arrow of the screen leaves it in one step, searched or not.
+    await found.keyboard.press('Alt+ArrowRight');
+    await found.keyboard.press('Alt+ArrowRight');
+    await expect(tags.getByLabel('Find tags')).toHaveValue('course');
+    await tags.getByLabel('Back to notes').click();
+    await expect(tags).toHaveCount(0);
+    await expect(found.locator('.sidebar').getByRole('button', { name: 'Back', exact: true })).toBeDisabled();
+    await found.close();
   }
 
   if (errors.length) throw new Error(`Browser errors:\n${errors.join('\n')}`);

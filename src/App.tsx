@@ -1,7 +1,7 @@
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { RefreshCw, X } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { DialogHost } from './components/Dialog';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -12,6 +12,7 @@ import { Organizer } from './components/Organizer';
 import { SettingsDialog } from './components/SettingsDialog';
 import { Sidebar } from './components/Sidebar';
 import { api, isAndroid, isNative } from './lib/api';
+import { backStack } from './lib/backStack';
 import { editorSession } from './lib/editorSession';
 import { useAppLayers } from './lib/useAppLayers';
 import { useDrawerGestures } from './lib/useDrawerGestures';
@@ -35,14 +36,15 @@ export function App() {
   const loading = useLibraryStore((state) => state.loading);
   const selectedNoteId = useLibraryStore((state) => state.selectedNote?.id ?? null);
   const hasSelectedNote = selectedNoteId !== null;
-  const screen = useLibraryStore((state) => state.screen);
-  const steps = useLibraryStore((state) => state.steps);
+  // Where one is in the library is the library's to say: the screen of
+  // notebooks or of tags, and whether the open note is in front of the list.
+  const organizing = useLibraryStore((state) => state.screen);
+  const reading = useLibraryStore((state) => state.reading);
   const showScreen = useLibraryStore((state) => state.showScreen);
+  const closeNote = useLibraryStore((state) => state.closeNote);
   const { layer, openLayer, closeLayer } = useAppLayers();
   const sidebarOpen = layer === 'sidebar';
-  const mobileEditor = layer === 'editor';
   const settingsOpen = layer === 'settings';
-  const organizing = layer === 'notebooks' || layer === 'tags' ? layer : null;
   const [theme, setTheme] = useState(() => localStorage.getItem('bever-theme') ?? 'system');
   // The note alone, with the notebooks and the list of notes put away.
   const [focused, setFocused] = useState(() => localStorage.getItem('bever-note-focus') === 'on');
@@ -55,44 +57,43 @@ export function App() {
   const syncStatus = useSyncStore((state) => state.status);
   const syncStarting = useSyncStore((state) => state.starting);
 
-  // Which screen is showing is part of where one is, and is the store's to
-  // say: the layer follows it, on going there and on going back to it.
+  // Back goes to where one was, once whatever is open has been closed:
+  // Android's button or gesture, and anything else that steps back in the
+  // window's history. The library says how many places lie behind.
   useEffect(() => {
-    if (screen) openLayer(screen);
-    else {
-      closeLayer('notebooks');
-      closeLayer('tags');
-    }
-  }, [screen, openLayer, closeLayer]);
-  // A screen that went by other means (Android's Back, another layer over
-  // it) is left in the store as well.
-  const shown = useRef<typeof organizing>(null);
-  useEffect(() => {
-    const before = shown.current;
-    shown.current = organizing;
-    if (before && !organizing && useLibraryStore.getState().screen === before) showScreen(null);
-  }, [organizing, showScreen]);
-  // After a step back or forward, the phone layout shows the note that
-  // the place has, or the list when it has none.
-  useEffect(() => {
-    if (steps === 0) return;
-    const state = useLibraryStore.getState();
-    if (state.screen) return;
-    if (state.selectedNote) openLayer('editor');
-    else closeLayer('editor');
-  }, [steps, openLayer, closeLayer]);
+    const back = () => void useLibraryStore.getState().goBack();
+    // What covers the list where one is: a screen, or the open note in a
+    // window that has room for one of the two only. What was opened on the
+    // list is under it then, and is not what Back closes first.
+    const tell = () => {
+      const state = useLibraryStore.getState();
+      const phone = window.matchMedia('(max-width: 760px)').matches;
+      const front = state.screen ?? (phone && state.reading && state.selectedNote ? 'note' : 'list');
+      backStack.places(state.placeAt, back, front);
+    };
+    tell();
+    return useLibraryStore.subscribe((state, before) => {
+      if (
+        state.placeAt !== before.placeAt ||
+        state.screen !== before.screen ||
+        state.reading !== before.reading ||
+        (state.selectedNote === null) !== (before.selectedNote === null)
+      )
+        tell();
+    });
+  }, []);
 
   // A note that is put out of sight stops playing. Its editor stays where
   // it is, under a screen or beside the list in the phone layout, and a
   // video in it would go on with nothing to stop it by.
   useEffect(() => {
     const phone = window.matchMedia('(max-width: 760px)').matches;
-    if (!organizing && !(phone && layer !== 'editor')) return;
+    if (!organizing && !(phone && !reading)) return;
     for (const media of document.querySelectorAll<HTMLMediaElement>(
       '.editor-panel video, .editor-panel audio',
     ))
       media.pause();
-  }, [layer, organizing]);
+  }, [reading, organizing]);
 
   // The buttons a mouse has for going back and forward.
   useEffect(() => {
@@ -157,12 +158,13 @@ export function App() {
       const key = event.key.toLowerCase();
       if (modifier && key === 'n') {
         event.preventDefault();
-        void createNote().then(() => openLayer('editor'));
+        void createNote();
       }
       if (modifier && (key === 'k' || (key === 'f' && event.shiftKey))) {
         event.preventDefault();
-        closeLayer('editor');
         showScreen(null);
+        // Where the note is in front of the list, the list comes forward.
+        if (window.matchMedia('(max-width: 760px)').matches) void closeNote();
         // The field of the list of notes, once that is what is showing.
         window.setTimeout(() =>
           document.querySelector<HTMLInputElement>('.notes-panel .search-wrap input')?.focus(),
@@ -200,18 +202,18 @@ export function App() {
     return () => window.removeEventListener('keydown', handle);
   }, [
     createNote,
+    closeNote,
     hasSelectedNote,
     settingsOpen,
     sidebarOpen,
     closeLayer,
-    openLayer,
     showScreen,
     toggleFocus,
   ]);
 
   const gestures = useDrawerGestures({
     open: sidebarOpen,
-    blocked: settingsOpen || Boolean(organizing) || (mobileEditor && hasSelectedNote),
+    blocked: settingsOpen || Boolean(organizing) || (reading && hasSelectedNote),
     onOpen: () => openLayer('sidebar'),
     onClose: () => closeLayer('sidebar'),
   });
@@ -219,17 +221,16 @@ export function App() {
 
   return (
     <div
-      className={`app-shell ${mobileEditor && hasSelectedNote ? 'mobile-has-note' : ''} ${focused && hasSelectedNote ? 'note-focus' : ''} ${organizing ? 'organizing' : ''}`}
+      className={`app-shell ${reading && hasSelectedNote ? 'mobile-has-note' : ''} ${focused && hasSelectedNote ? 'note-focus' : ''} ${organizing ? 'organizing' : ''}`}
       {...gestures}
     >
       <Sidebar
         open={sidebarOpen}
         onClose={() => closeLayer('sidebar')}
-        onOpenNote={() => openLayer('editor')}
         onSettings={() => openLayer('settings')}
         onOrganize={showScreen}
       />
-      <NoteList onOpenSidebar={() => openLayer('sidebar')} onOpenNote={() => openLayer('editor')} />
+      <NoteList onOpenSidebar={() => openLayer('sidebar')} />
       {/* A note that cannot be drawn says so, and leaves the lists to go
           on from. Another note is another try. */}
       <ErrorBoundary
@@ -243,14 +244,14 @@ export function App() {
             </p>
             <pre className="failure-detail">{error.message}</pre>
             <div className="failure-actions">
-              <button onClick={() => closeLayer('editor')}>Back to notes</button>
+              <button onClick={() => void closeNote()}>Back to notes</button>
               <button onClick={retry}>Try again</button>
             </div>
           </main>
         )}
       >
         <NoteWorkspace
-          onBack={() => closeLayer('editor')}
+          onBack={() => void closeNote()}
           focused={focused && hasSelectedNote}
           onToggleFocus={toggleFocus}
         />

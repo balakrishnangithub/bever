@@ -1,0 +1,1 @@
+Back goes back to where you were: from a note to its list, from a search to the notebook, from the notebook to where it was chosen, and out of Bever only from the first place. A link that says only the address of a note is shown by the note's title. A stack or a tag found on the screens of notebooks and tags can be unfolded.

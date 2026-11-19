@@ -43,6 +43,8 @@ export interface BeverApi {
    */
   listingTags: (filter: NoteFilter) => Promise<Record<string, number>>;
   getNote: (id: string) => Promise<Note>;
+  /** The titles of the notes with these ids, by id; an id that is no note's is left out. */
+  noteTitles: (ids: string[]) => Promise<Record<string, string>>;
   createNote: (notebookId: string | null) => Promise<Note>;
   saveNote: (input: SaveNote) => Promise<SavedNote>;
   setNotesTrashed: (noteIds: string[], trashed: boolean) => Promise<number>;
@@ -158,6 +160,7 @@ const tauriApi: BeverApi = {
   listNotes: (filter) => invoke('list_notes', { filter }),
   listingTags: (filter) => invoke('listing_tags', { filter }),
   getNote: (id) => invoke('get_note', { id }),
+  noteTitles: (ids) => invoke('note_titles', { ids }),
   createNote: (notebookId) => invoke('create_note', { notebookId }),
   saveNote: (input) => invoke('save_note', { input }),
   setNotesTrashed: (noteIds, trashed) => invoke('set_notes_trashed', { noteIds, trashed }),

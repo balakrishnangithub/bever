@@ -425,6 +425,22 @@ impl Library {
         crate::search::search_notes(self, filter)
     }
 
+    /// The titles of the notes with these ids, by id: what a link to a
+    /// note is shown as when its own text is only its address. A note in
+    /// the trash still has its title; an id that is no note's is left out.
+    pub fn note_titles(&self, ids: &[String]) -> Result<HashMap<String, String>> {
+        let connection = self.connection.lock();
+        let mut statement = connection.prepare("SELECT title FROM notes WHERE id = ?1")?;
+        let mut titles = HashMap::new();
+        for id in ids {
+            let title: Option<String> = statement.query_row([id], |row| row.get(0)).optional()?;
+            if let Some(title) = title {
+                titles.insert(id.clone(), title);
+            }
+        }
+        Ok(titles)
+    }
+
     /// How many notes of the listing `filter` gives have each tag, by the
     /// tag's id. The whole listing is counted, whatever page is asked for.
     pub fn listing_tags(&self, filter: &NoteFilter) -> Result<HashMap<String, u64>> {

@@ -1,6 +1,8 @@
 import type { Editor } from '@tiptap/core';
 import { DOMSerializer } from '@tiptap/pm/model';
 
+import { withLinkAddresses } from '../lib/noteLinks';
+
 let workshop: Document | null = null;
 
 /**
@@ -12,6 +14,9 @@ let workshop: Document | null = null;
  * of them each time it is edited, although they are deliberately not shown
  * until asked for. Here the elements are built in a document that is never
  * displayed, where nothing is fetched.
+ *
+ * A link that the editor shows by the title of its note says its address
+ * here, as it does in the note; see `noteLinks`.
  */
 export function noteHtml(editor: Editor): string {
   workshop ??= document.implementation.createHTMLDocument('');
@@ -21,5 +26,6 @@ export function noteHtml(editor: Editor): string {
     { document: workshop },
     holder,
   );
+  withLinkAddresses(holder);
   return holder.innerHTML;
 }

@@ -4,6 +4,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 
 import { api } from '../lib/api';
 import { dialogs } from '../lib/dialogs';
+import { withLinkTitles } from '../lib/noteLinks';
 import { onWindowShortened } from '../lib/windowHeight';
 import { useBackCloses } from '../lib/useBackCloses';
 import { useLibraryStore } from '../store/useLibraryStore';
@@ -93,7 +94,9 @@ export function RichEditor({
   const editor = useEditor(
     {
       extensions: createExtensions(),
-      content: note.contentHtml,
+      // Shown with the titles of the notes that its links say only the
+      // addresses of; what is stored goes on saying the addresses.
+      content: withLinkTitles(note.contentHtml),
       editable,
       immediatelyRender: false,
       editorProps: {
@@ -259,7 +262,7 @@ export function RichEditor({
   useEffect(() => {
     if (!editor || shownVersion.current === contentVersion) return;
     shownVersion.current = contentVersion;
-    editor.commands.setContent(note.contentHtml, { emitUpdate: false });
+    editor.commands.setContent(withLinkTitles(note.contentHtml), { emitUpdate: false });
     shown.current = { html: note.contentHtml, face: faceOf(editor.state.doc) };
   }, [editor, contentVersion, note.contentHtml]);
 

@@ -413,6 +413,7 @@ pub fn run() {
             commands::bootstrap,
             commands::list_notes,
             commands::listing_tags,
+            commands::note_titles,
             commands::get_note,
             commands::create_note,
             commands::save_note,

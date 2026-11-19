@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.5.0 — 2026-11-19
+
+Back goes back to where you were: out of a search to the notebook, out of the notebook to where it was chosen, and out of Bever only when there is nowhere left to go back to. A link that says nothing but the address of a note is shown by the note's title, as Evernote shows it. A stack or a tag found on the screens of notebooks and tags can be unfolded.
+
+### Changed
+
+- **Back goes back to where you were.** Android's Back knew only of what was open over the list: with a notebook chosen and a search typed in it, Back left Bever. Now it first closes what is open, as it did, and then goes back through the places you have been, one for each press: from a note to the list it was opened from, or to the note whose link led to it; from a search to the listing as it was before the search; from a notebook, a tag or the trash to where it was chosen, which is the screen of notebooks if that is where it was chosen; and from the first place, out of Bever. These are the places the arrows beside the name, Alt+Left and the side button of a mouse have always gone through, so that all of them, on a phone and on a computer, now go the same way.
+- **A search is a step.** The first letter typed into the search of a list makes the step and the letters after it change it, so that Back from a search, however long, is the list whole again; clearing the search is the same step back. A filter chosen in the panel of filters is such a step as well, and so is a search on the screens of notebooks and of tags. Until now a search changed the place one was at, and going back from it went to wherever one had been before the notebook.
+- **The arrow in a note leads to the list.** In a narrow window the arrow at the top of a note went back one layer. It now leads to the list the note was opened from in one step, also when links led through several notes on the way; Back goes through those one at a time.
+- **A screen is found as it was left.** Going back to the screen of notebooks or of tags finds its search as it was and the same stacks and tags unfolded.
+- **A note that is deleted leaves no empty step behind.** Going back from the list after deleting the note that was open took one press that showed nothing.
+- In a wide window made narrow, the note that was open beside the list is in front of it.
+
+### Added
+
+- **A link that says only an address is shown by the title of its note.** Evernote writes some links to notes with the link's own address for their text (`evernote:///view/…`) and, when it shows the note, puts the title of the linked note there, which it looks up. Imported, such a link led to the right note and showed the address. It is now shown by the title the linked note has, looked up each time the note is opened, so that a note renamed since is shown by its new name. The note itself goes on saying the address: it is not stored anew for being shown, and when it is written in, the link is stored as it was. Changing the link's text by hand makes that text the link's own.
+- **What a search of the notebooks or of the tags finds can be unfolded.** A stack that is found has its arrow, and unfolds to the notebooks in it; a tag that is found unfolds to the tags inside it, and those in their turn. What is found is listed as before, each with where it is.
+
+### Fixed
+
+- **A link to a note that has been deleted** answered with an error that named the note by its identifier. It now says that the note is no longer in the library.
+- **An Evernote link that says only an address, to a note that was never imported,** searched the titles of all notes for the address and listed nothing. It now says that the note is not in the library, and stays where it is.
+
+### Compatibility
+
+- Nothing changes in how notes are kept or synchronized, and nothing that worked is taken away. A library of 1.0.0 or later is opened as it is.
+
+### What was verified
+
+- **The links of the library that was reported from,** by their kinds and numbers only: of 285 links between notes, 283 lead to their note, and 5 of those say only an address and are the ones now shown by a title; 2 are Evernote's links to notes that are not in the library. Their forms are the two that Evernote writes (`evernote:///view/…` and `https://www.evernote.com/shard/…/nl/…`).
+- **Every kind of link, in a test of the Rust core** (`every_kind_of_link_to_a_note_finds_its_note_or_stays`): Evernote's two forms and the form of a shared note, an identifier in capitals, a link known only by the title it says, a short link, a link that says only its address, and links with nothing to go by, which stay as they are; none loses its text, and a second import changes none.
+- **In the browser check,** wide and in a phone's window with touches, a note with nine links: to a note by words and by its address only, to itself, to a note in the trash, to a note that is gone, Evernote's links to notes never imported (by words, by an address, from the web), and to the web. Each is followed, by a touch in a note that is only read and by the bubble and Ctrl in one that is written in, and gone back from; the web view is never sent anywhere. The note written in keeps showing the title, and a linked note renamed is shown by its new name.
+- **Going back, in the browser check, in a phone's window:** the walk that was reported (all notes, the screen of notebooks, a stack found and unfolded, a notebook in it, a search, a note) and back out of it step by step to all notes with nothing left behind; the same by the drawer; a search cleared by its button; notes ticked and one of them opened; a filter chosen in its panel; the arrow in a note after links through three notes. Everything that was checked of Back before is checked still.
+- **In the built Windows application:** the note that was reported, opened on a copy of the database of its library: both of its links to notes are shown by titles and nothing in it says an address; it is stored as it was after being shown; a link followed opens the note whose title it showed, and Back returns from it. In the check with an export imported (`npm run test:native`), a note of the check's own whose link says only an address is shown by its note's title, is not stored anew for that, and written in is stored with the address as it was; and the side button of a mouse goes back one place, not two. The general check passed (28 checks with an empty library, 33 with an export that holds PDFs), and so did the synchronization check against a stand-in for pCloud (`npm run test:sync`: 13 and 12).
+- Automated: 185 tests of the Rust core and 13 of its round trips through ENEX, 28 of the native shell, 266 of the interface, and the browser check. `cargo audit` and `npm audit` find no vulnerability.
+- The Windows program and the Android package were built from the released source.
+
+### Not verified
+
+- **On a phone.** None of this was run on a phone, which was not at hand, and Back is what a phone has. The steps back are made the way the things Back closes have been made since 1.3.0, which was measured on a phone then: entries in the web view's history, made in answer to a touch. What is new is that there are more of them, and that some are made a moment after the touch, when the note has been read from the library; the measurements of 1.3.0 had such a case, and it was honoured. That is reasoning from them, not a trial of this release.
+- The Windows installers were built, not run.
+
 ## 1.4.0 — 2026-11-19
 
 Books, texts and archives are read where they are, as PDFs are. Scanned pages of a PDF are drawn with their pictures. A mark on a picture takes the size and the colour chosen while it is selected. A link to another note works in a note that is only read. A change that was discarded is not sent by the next synchronization.

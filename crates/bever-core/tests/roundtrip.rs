@@ -632,3 +632,120 @@ fn a_note_from_an_evernote_export_is_exported_as_the_text_it_was() {
     }
     assert!(!exported.ends_with('\n'));
 }
+
+/// Every form a link to another note has in Evernote's notes, in one note,
+/// with the notes they lead to: each is pointed at its note or left as it
+/// is, and none loses its text.
+#[test]
+fn every_kind_of_link_to_a_note_finds_its_note_or_stays() {
+    const NOSE: &str = "0a1b2c3d-0000-4000-8000-00000000000a";
+    const MEETING: &str = "0a1b2c3d-0000-4000-8000-00000000000b";
+    const NOWHERE: &str = "0a1b2c3d-0000-4000-8000-00000000000f";
+    let own = format!("evernote:///view/123456/s12/{NOSE}/{NOSE}");
+    let lost = format!("evernote:///view/123456/s12/{NOWHERE}/{NOWHERE}/");
+    let links = [
+        // In the application's form, by words that are no longer the title.
+        format!(r#"<a href="evernote:///view/123456/s12/{NOSE}/{NOSE}/">An older name</a>"#),
+        // Saying nothing but its own address, as Evernote writes a link it
+        // shows by the title it looks up.
+        format!(r#"<a href="{own}" rev="{{&quot;isCached&quot;:false}}">{own}</a>"#),
+        // The web's form, and the form of a note that was shared.
+        format!(
+            r#"<a href="https://www.evernote.com/shard/s12/nl/123456/{MEETING}/">By the web</a>"#
+        ),
+        format!(
+            r#"<a href="https://www.evernote.com/shard/s12/sh/{MEETING}/0123456789abcdef0123456789abcdef">Shared</a>"#
+        ),
+        // The same note, its identifier in capitals.
+        format!(
+            r#"<a href="evernote:///view/123456/s12/{0}/{0}/">In capitals</a>"#,
+            NOSE.to_uppercase()
+        ),
+        // A note not known by its identifier, but by the title the link says.
+        format!(r#"<a href="{lost}">Meeting  notes</a>"#),
+        // A short link names no note; its words do.
+        r#"<a href="https://www.evernote.com/l/AbCdEfGh">Runny nose</a>"#.to_owned(),
+        // Nothing to go by: words that are no title, and an address alone.
+        format!(r#"<a href="{lost}">Somewhere else</a>"#),
+        format!(r#"<a href="{lost}">{lost}</a>"#),
+        // Not a link to a note at all.
+        r#"<a href="https://help.evernote.com/hc/en-us">Help</a>"#.to_owned(),
+    ];
+    let note = |title: &str, guid: &str, body: &str| {
+        format!(
+            "<note><title>{title}</title><guid>{guid}</guid><created>20240102T030405Z</created><content><![CDATA[<en-note>{body}</en-note>]]></content></note>"
+        )
+    };
+    let enex = format!(
+        r#"<?xml version="1.0"?><en-export>{}{}{}</en-export>"#,
+        note("Runny nose", NOSE, "<div>Tea.</div>"),
+        note("Meeting notes", MEETING, "<div>Minutes.</div>"),
+        note(
+            "Links",
+            "0a1b2c3d-0000-4000-8000-00000000000c",
+            &links
+                .iter()
+                .map(|link| format!("<div>{link}</div>"))
+                .collect::<String>()
+        ),
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let library =
+        Library::open_at(directory.path().join("db"), directory.path().join("blobs")).unwrap();
+    let source = directory.path().join("links.enex");
+    fs::write(&source, enex).unwrap();
+    let report = import_enex(&library, &source, None).unwrap();
+    assert_eq!(report.notes_imported, 3);
+    assert_eq!(report.links_resolved, 7);
+
+    let listed = library.list_notes(&NoteFilter::default()).unwrap().notes;
+    let id_of = |title: &str| {
+        listed
+            .iter()
+            .find(|note| note.title == title)
+            .unwrap()
+            .id
+            .clone()
+    };
+    let (nose, meeting) = (id_of("Runny nose"), id_of("Meeting notes"));
+    let page = library.get_note(&id_of("Links")).unwrap().content_html;
+    let leads = |text: &str, to: Option<&str>| {
+        let end = page
+            .find(&format!(">{text}</a>"))
+            .unwrap_or_else(|| panic!("no link saying {text}"));
+        let anchor = &page[page[..end].rfind("<a ").unwrap()..end];
+        match to {
+            Some(id) => assert!(
+                anchor.contains(&format!(r#"href="bever://note/{id}""#)),
+                "{text}: {anchor}"
+            ),
+            None => assert!(!anchor.contains("bever://"), "{text}: {anchor}"),
+        }
+    };
+    leads("An older name", Some(&nose));
+    // Its text is its address still; what it is shown by is looked up.
+    leads(&own, Some(&nose));
+    leads("By the web", Some(&meeting));
+    leads("Shared", Some(&meeting));
+    leads("In capitals", Some(&nose));
+    leads("Meeting  notes", Some(&meeting));
+    leads("Runny nose", Some(&nose));
+    leads("Somewhere else", None);
+    leads(&lost, None);
+    leads("Help", None);
+
+    // The titles the links are shown by: of notes that are there, in the
+    // trash or not, and of no others.
+    library
+        .set_notes_trashed(std::slice::from_ref(&meeting), true)
+        .unwrap();
+    let asked = [nose.clone(), meeting.clone(), "no-such-note".to_owned()];
+    let titles = library.note_titles(&asked).unwrap();
+    assert_eq!(titles.len(), 2);
+    assert_eq!(titles[&nose], "Runny nose");
+    assert_eq!(titles[&meeting], "Meeting notes");
+
+    // A second import of the same file changes nothing about the links.
+    let again = import_enex(&library, &source, None).unwrap();
+    assert_eq!(again.links_resolved, 0);
+}

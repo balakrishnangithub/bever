@@ -34,7 +34,6 @@ import { useOrganizeMenus } from './organizeMenus';
 interface Props {
   open: boolean;
   onClose: () => void;
-  onOpenNote: () => void;
   onSettings: () => void;
   /** Opens the screen that lists all notebooks, or all tags. */
   onOrganize: (kind: OrganizerKind) => void;
@@ -84,7 +83,7 @@ const SHORTCUT_ICONS: Record<ShortcutTarget, ReactNode> = {
   search: <Search size={14} />,
 };
 
-export function Sidebar({ open: visible, onClose, onOpenNote, onSettings, onOrganize }: Props) {
+export function Sidebar({ open: visible, onClose, onSettings, onOrganize }: Props) {
   const overview = useLibraryStore((state) => state.overview);
   const filter = useLibraryStore((state) => state.filter);
   const ocr = useLibraryStore((state) => state.ocr);
@@ -110,7 +109,6 @@ export function Sidebar({ open: visible, onClose, onOpenNote, onSettings, onOrga
   };
   const newNote = async () => {
     await createNote();
-    onOpenNote();
     onClose();
   };
   const toggleCollapsed = (id: string) =>
@@ -376,7 +374,6 @@ export function Sidebar({ open: visible, onClose, onOpenNote, onSettings, onOrga
                       onClick={() => {
                         if (shortcut.targetType === 'note') {
                           void selectNote(shortcut.targetId);
-                          onOpenNote();
                           onClose();
                         } else if (shortcut.targetType === 'notebook')
                           void navigate({ notebookId: shortcut.targetId });

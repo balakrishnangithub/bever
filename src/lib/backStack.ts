@@ -4,13 +4,26 @@
  * keyboard's key for it, or anything else that steps back in the window's
  * history.
  *
- * Two kinds of thing are kept here, in the order they were opened:
+ * Three kinds of thing are kept here:
  *
- * - the layers of the application (the drawer, the open note in the phone
- *   layout, the settings, the screens of notebooks and of tags), of which
- *   the one opened last is the one showing;
+ * - under everything, the places one has been in the library (a listing, a
+ *   search in it, an open note, a screen of notebooks or of tags; see
+ *   `places`). The library keeps them and says here how many lie behind
+ *   the one that is showing, and what a step back to the last of them is;
+ * - the layers of the application (the drawer in the phone layout, the
+ *   settings), of which the one opened last is the one showing;
  * - whatever else is opened over them: a dialog, a menu, a panel, a
  *   preview, an editor of a picture.
+ *
+ * Layers and what is opened over them are kept in the order they were
+ * opened, and are closed before anything is stepped back to: Back closes
+ * what is open, then goes back to where one was, and leaves the
+ * application when there is nowhere to go back to. Something that was
+ * opened on what is no longer in front (notes ticked in the list, and then
+ * one of them opened, which covers the list) lies under where one is now,
+ * and is closed after the step back, not before it. What is still to be
+ * seen over where one is (a panel of filters, when a filter was chosen in
+ * it) is closed first.
  *
  * Each has an entry in the window's history, so that a step back there
  * lands on the entry of what was under it, and the thing on top is closed:
@@ -34,9 +47,13 @@
 interface LayerItem {
   kind: 'layer';
   name: string;
+  /** What was in front when it was opened. */
+  on: string;
 }
 interface OverlayItem {
   kind: 'overlay';
+  /** What was in front when it was opened. */
+  on: string;
   /**
    * Closes it, asked by Back. Answers false when it stays open: it has
    * something to finish first.
@@ -59,6 +76,12 @@ const BACK_LIMIT_MS = 1000;
 const TOUCHES = ['pointerup', 'touchend', 'mousedown', 'keydown'] as const;
 
 const items: Item[] = [];
+/** How many places lie behind the one that is showing. */
+let under = 0;
+/** Goes back to the last of them. */
+let stepBack: (() => void) | null = null;
+/** What is in front at the place that is showing: the list, a note, a screen. */
+let front = '';
 /** A layer that has no entry in the history: beside the others, not over them. */
 let loose: string | null = null;
 /** A step of our own in the history is on its way. */
@@ -76,7 +99,7 @@ const depthThere = () => state().depth ?? 0;
 
 /** The layer showing at a depth: the topmost at or under it. */
 function layerAt(depth: number): string | undefined {
-  for (let index = Math.min(depth, items.length) - 1; index >= 0; index -= 1) {
+  for (let index = Math.min(depth - under, items.length) - 1; index >= 0; index -= 1) {
     const item = items[index];
     if (item?.kind === 'layer') return item.name;
   }
@@ -91,14 +114,21 @@ function tell() {
 function reconcile() {
   if (traversing) return;
   const have = depthThere();
-  const want = items.length;
+  const want = under + items.length;
   known = have;
   if (want < have) {
     traversing = true;
     window.clearTimeout(limit);
-    // A step that never arrives is not waited for for ever.
+    // A step that never arrives is not waited for for ever. A browser
+    // keeps only so many entries (fifty, in this one), and after more
+    // places than that there is nothing as far back as one has gone: the
+    // entry one is on then stands for where one is, and is the last.
     limit = window.setTimeout(() => {
       traversing = false;
+      const wanted = under + items.length;
+      if (depthThere() > wanted) {
+        window.history.replaceState({ ...state(), bever: layerAt(wanted), depth: wanted }, '');
+      }
       reconcile();
     }, BACK_LIMIT_MS);
     if (have - want === 1) window.history.back();
@@ -126,7 +156,10 @@ function onHistory() {
     // Someone stepped back: the topmost thing is closed, and that one only.
     // From here on nothing is given an entry until the page is touched.
     touched = false;
-    const top = items[items.length - 1];
+    const last = items[items.length - 1];
+    // What was opened on something that is no longer in front lies under
+    // where one is, and is closed when that is in front again.
+    const top = last && (last.on === front || under === 0) ? last : undefined;
     if (top?.kind === 'overlay') {
       let stays = false;
       try {
@@ -138,6 +171,14 @@ function onHistory() {
       if (!stays && items[items.length - 1] === top) items.pop();
     } else if (top) {
       items.pop();
+    } else if (under > 0) {
+      // Nothing is open: the step is one back to where one was.
+      under -= 1;
+      try {
+        stepBack?.();
+      } catch {
+        // The history is a step back either way.
+      }
     }
     tell();
   }
@@ -160,7 +201,22 @@ function listen() {
 
 /** The layer that is showing, or null. */
 function layer(): string | null {
-  return loose ?? layerAt(items.length) ?? null;
+  return loose ?? layerAt(under + items.length) ?? null;
+}
+
+/**
+ * Says how many places lie behind the one showing, how to go back to the
+ * last of them, and what is in front at the one showing (the list, a note
+ * that covers it, a screen). Called whenever any of that changes: by going
+ * on, by going back, by whatever means.
+ */
+function places(behind: number, back: () => void, inFront = '') {
+  listen();
+  stepBack = back;
+  front = inFront;
+  if (under === behind) return;
+  under = behind;
+  reconcile();
 }
 
 /**
@@ -171,7 +227,9 @@ function openLayer(name: string, inHistory: boolean) {
   listen();
   if (!inHistory) {
     // What lay over everything makes way for it.
-    for (let over = layerAt(items.length); over; over = layerAt(items.length)) closeLayer(over);
+    for (let over = layerAt(under + items.length); over; over = layerAt(under + items.length)) {
+      closeLayer(over);
+    }
     loose = name;
     tell();
     return;
@@ -186,7 +244,7 @@ function openLayer(name: string, inHistory: boolean) {
   }
   // The drawer makes way for what was opened from it.
   if (top?.kind === 'layer' && top.name === 'sidebar') items.pop();
-  items.push({ kind: 'layer', name });
+  items.push({ kind: 'layer', name, on: front });
   tell();
   reconcile();
 }
@@ -230,7 +288,7 @@ function closeLayer(name: string) {
 /** Something was opened over what is there. Back will ask it to close. */
 function opened(back: () => boolean | void): object {
   listen();
-  const item: OverlayItem = { kind: 'overlay', back };
+  const item: OverlayItem = { kind: 'overlay', back, on: front };
   items.push(item);
   reconcile();
   return item;
@@ -252,4 +310,4 @@ function subscribe(listener: () => void) {
   };
 }
 
-export const backStack = { layer, openLayer, closeLayer, opened, closed, subscribe };
+export const backStack = { layer, openLayer, closeLayer, opened, closed, places, subscribe };

@@ -30,6 +30,23 @@ interface OpenMenu {
   items: MenuItem[];
 }
 
+/**
+ * What was unfolded on these screens, for as long as the application runs:
+ * a screen one comes back to is as it was left.
+ */
+const unfolded = {
+  /** Stacks begin open and tags closed: a stack holds a few notebooks, a tag may hold hundreds. */
+  closedStacks: new Set<string>(),
+  openTags: new Set<string>(),
+  /** Stacks unfolded where they were found by a search; there they begin closed. */
+  foundStacks: new Set<string>(),
+};
+
+/** Keeps what is unfolded of one kind for the next visit. */
+function keepUnfolded(kind: keyof typeof unfolded, ids: Set<string>) {
+  unfolded[kind] = ids;
+}
+
 const plural = (count: number, noun: string) => `${count.toLocaleString()} ${noun}${count === 1 ? '' : 's'}`;
 
 /**
@@ -42,7 +59,10 @@ export function Organizer({ kind, onClose }: { kind: OrganizerKind; onClose: () 
   const overview = useLibraryStore((state) => state.overview);
   const openView = useLibraryStore((state) => state.openView);
   const { notebookMenu, stackMenu, tagMenu, newNotebook, newStack, newTag } = useOrganizeMenus();
-  const [query, setQuery] = useState('');
+  // What the list is searched for is part of where one is: a step back
+  // from a notebook that was found returns to what was found.
+  const query = useLibraryStore((state) => state.screenQuery);
+  const setQuery = useLibraryStore((state) => state.setScreenQuery);
   // The order chosen for each of the two screens is this device's.
   const [sort, setSortState] = useState<Sort>(() => {
     try {
@@ -59,10 +79,9 @@ export function Organizer({ kind, onClose }: { kind: OrganizerKind; onClose: () 
       // Not remembered, then.
     }
   };
-  // Stacks begin open and tags closed: a stack holds a few notebooks, a tag
-  // may hold hundreds.
-  const [closedStacks, setClosedStacks] = useState<Set<string>>(new Set());
-  const [openTags, setOpenTags] = useState<Set<string>>(new Set());
+  const [closedStacks, setClosedStacks] = useState(unfolded.closedStacks);
+  const [openTags, setOpenTags] = useState(unfolded.openTags);
+  const [foundStacks, setFoundStacks] = useState(unfolded.foundStacks);
   const [menu, setMenu] = useState<OpenMenu | null>(null);
   const { counts } = overview;
   const wanted = query.trim().toLowerCase();
@@ -82,11 +101,15 @@ export function Organizer({ kind, onClose }: { kind: OrganizerKind; onClose: () 
 
   // Opening one leaves the screen: the store puts it away as it goes.
   const open = (filter: Partial<NoteFilter>) => openView(filter);
-  const toggle = (set: Set<string>, id: string) => {
-    const next = new Set(set);
+  /** Folds or unfolds one of a kind, here and for the next visit. */
+  const toggle = (kind: keyof typeof unfolded, id: string) => {
+    const next = new Set(unfolded[kind]);
     if (next.has(id)) next.delete(id);
     else next.add(id);
-    return next;
+    keepUnfolded(kind, next);
+    if (kind === 'closedStacks') setClosedStacks(next);
+    else if (kind === 'openTags') setOpenTags(next);
+    else setFoundStacks(next);
   };
   /** Opens a menu at the pointer, or under the button that was pressed. */
   const openMenu = (event: MouseEvent, label: string, items: MenuItem[]) => {
@@ -169,8 +192,9 @@ export function Organizer({ kind, onClose }: { kind: OrganizerKind; onClose: () 
       menu: notebookMenu(notebook),
     });
 
-  const stackRow = (stack: Stack) => {
-    const expanded = !closedStacks.has(stack.id);
+  /** A stack with its notebooks under it. Found by a search, it begins folded. */
+  const stackRow = (stack: Stack, found = false) => {
+    const expanded = found ? foundStacks.has(stack.id) : !closedStacks.has(stack.id);
     return (
       <div key={stack.id}>
         {row({
@@ -178,9 +202,10 @@ export function Organizer({ kind, onClose }: { kind: OrganizerKind; onClose: () 
           depth: 0,
           icon: <Layers3 size={15} />,
           name: stack.name,
+          detail: found ? 'Stack' : undefined,
           count: stackCount(stack),
           expanded,
-          onToggle: () => setClosedStacks((current) => toggle(current, stack.id)),
+          onToggle: () => toggle(found ? 'foundStacks' : 'closedStacks', stack.id),
           onOpen: () => void open({ stackId: stack.id }),
           menuLabel: `Actions for ${stack.name}`,
           menu: stackMenu(stack),
@@ -195,10 +220,19 @@ export function Organizer({ kind, onClose }: { kind: OrganizerKind; onClose: () 
     );
   };
 
-  const tagRows = (tags: Tag[], depth: number): ReactNode =>
+  /**
+   * Tags, each with the tags inside it under it when it is unfolded. Found
+   * by a search, a tag says where it is instead of how many it holds.
+   */
+  const tagRows = (tags: Tag[], depth: number, found = false): ReactNode =>
     ordered(tags, (tag) => tag.name, tagCount).map((tag) => {
       const inside = children.get(tag.id) ?? [];
       const expanded = openTags.has(tag.id);
+      const detail = found
+        ? tagPath(tag, overview.tags).join(' › ') || undefined
+        : inside.length
+          ? plural(inside.length, 'tag')
+          : undefined;
       return (
         <div key={tag.id}>
           {row({
@@ -206,10 +240,10 @@ export function Organizer({ kind, onClose }: { kind: OrganizerKind; onClose: () 
             depth,
             icon: <TagIcon size={15} />,
             name: tag.name,
-            detail: inside.length ? plural(inside.length, 'tag') : undefined,
+            detail,
             count: tagCount(tag),
             expanded: inside.length ? expanded : undefined,
-            onToggle: inside.length ? () => setOpenTags((current) => toggle(current, tag.id)) : undefined,
+            onToggle: inside.length ? () => toggle('openTags', tag.id) : undefined,
             onOpen: () => void open({ tagIds: [tag.id] }),
             menuLabel: `Actions for ${tag.name}`,
             menu: tagMenu(tag),
@@ -228,21 +262,11 @@ export function Organizer({ kind, onClose }: { kind: OrganizerKind; onClose: () 
       const stacks = overview.stacks.filter((stack) => stack.name.toLowerCase().includes(wanted));
       const notebooks = overview.notebooks.filter((notebook) => notebook.name.toLowerCase().includes(wanted));
       found = stacks.length + notebooks.length;
+      // A stack that was found can be unfolded, to what is in it; a
+      // notebook that was found says which stack it is in.
       list = (
         <>
-          {ordered(stacks, (stack) => stack.name, stackCount).map((stack) =>
-            row({
-              key: stack.id,
-              depth: 0,
-              icon: <Layers3 size={15} />,
-              name: stack.name,
-              detail: 'Stack',
-              count: stackCount(stack),
-              onOpen: () => void open({ stackId: stack.id }),
-              menuLabel: `Actions for ${stack.name}`,
-              menu: stackMenu(stack),
-            }),
-          )}
+          {ordered(stacks, (stack) => stack.name, stackCount).map((stack) => stackRow(stack, true))}
           {ordered(notebooks, (notebook) => notebook.name, notebookCount).map((notebook) =>
             notebookRow(notebook, 0, stackName(notebook)),
           )}
@@ -266,19 +290,8 @@ export function Organizer({ kind, onClose }: { kind: OrganizerKind; onClose: () 
   } else if (wanted) {
     const tags = overview.tags.filter((tag) => tag.name.toLowerCase().includes(wanted));
     found = tags.length;
-    list = ordered(tags, (tag) => tag.name, tagCount).map((tag) =>
-      row({
-        key: tag.id,
-        depth: 0,
-        icon: <TagIcon size={15} />,
-        name: tag.name,
-        detail: tagPath(tag, overview.tags).join(' › ') || undefined,
-        count: tagCount(tag),
-        onOpen: () => void open({ tagIds: [tag.id] }),
-        menuLabel: `Actions for ${tag.name}`,
-        menu: tagMenu(tag),
-      }),
-    );
+    // A tag that was found can be unfolded, to the tags inside it.
+    list = tagRows(tags, 0, true);
   } else {
     found = overview.tags.length;
     list = tagRows(children.get(null) ?? [], 0);

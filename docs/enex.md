@@ -34,7 +34,9 @@ Evernote links (`evernote:///view/…` and `https://www.evernote.com/shard/…`)
 1. by GUID, when the export contains GUIDs;
 2. otherwise by the title the link shows, when exactly one note in the library has that title.
 
-Exports from current Evernote versions contain no GUIDs, so the second rule is the one that usually applies. Links whose target has not been imported yet stay as they are and are connected by a later import that brings the target. Clicking a link that is still unconnected searches for its text.
+Exports from current Evernote versions contain no GUIDs, so the second rule is the one that usually applies. Links whose target has not been imported yet stay as they are and are connected by a later import that brings the target. Clicking a link that is still unconnected searches for its text; one that says nothing but its own address has nothing to search for, and says that its note is not in the library.
+
+Evernote writes some links with the link's own address for their text, and shows them by the title of the linked note, which it looks up. Such a link is connected by its GUID like any other, and its text is kept as it is: an address. The editor shows it by the title the linked note has when the note is opened (`noteLinks.ts`), and what is stored goes on saying the address, so that the note is not changed by being shown and is exported as it was imported. A link with a GUID that no note of the library has, and no words, cannot be connected by a title either.
 
 ### Content
 

@@ -53,6 +53,15 @@ pub(crate) async fn listing_tags(
     blocking(&app, move |_, state| state.library.listing_tags(&filter)).await
 }
 
+/// The titles of notes, by id, for links that are shown by them.
+#[tauri::command]
+pub(crate) async fn note_titles(
+    app: AppHandle,
+    ids: Vec<String>,
+) -> Result<HashMap<String, String>, String> {
+    blocking(&app, move |_, state| state.library.note_titles(&ids)).await
+}
+
 #[tauri::command]
 pub(crate) async fn get_note(app: AppHandle, id: String) -> Result<Note, String> {
     blocking(&app, move |_, state| state.library.get_note(&id)).await

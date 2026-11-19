@@ -54,6 +54,10 @@ const blobFiles = () =>
       ).length
     : 0;
 
+/** A note of the test's own that another links to, by nothing but this address. */
+const linkedGuid = 'aaaaaaaa-0000-4000-8000-000000000001';
+const linkedAddress = `evernote:///view/123456/s12/${linkedGuid}/${linkedGuid}`;
+
 let imported = null;
 if (exportFile) {
   if (!existsSync(importer)) {
@@ -80,6 +84,31 @@ if (exportFile) {
   );
   execFileSync(importer, [listExport, dataDirectory], { encoding: 'utf8' });
   imported.notes += 1;
+  // And two notes of the test's own, one with a link to the other that
+  // says nothing but the other's address, as Evernote writes a link it
+  // shows by the title it looks up; see the check that opens it.
+  const linksExport = join(work, 'Links.enex');
+  const enexNote = (title, guid, body) =>
+    `<note><title>${title}</title><guid>${guid}</guid>` +
+    '<created>20240111T192505Z</created><updated>20240130T141156Z</updated>' +
+    '<content><![CDATA[<?xml version="1.0" encoding="UTF-8" standalone="no"?>' +
+    '<!DOCTYPE en-note SYSTEM "http://xml.evernote.com/pub/enml2.dtd">' +
+    `<en-note>${body}</en-note>]]></content></note>`;
+  writeFileSync(
+    linksExport,
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+      '<!DOCTYPE en-export SYSTEM "http://xml.evernote.com/pub/evernote-export4.dtd">' +
+      '<en-export export-date="20261119T000000Z" application="Evernote" version="10.0">' +
+      enexNote('Linked to by an address', linkedGuid, '<div>The note the link leads to.</div>') +
+      enexNote(
+        'Says only an address',
+        'aaaaaaaa-0000-4000-8000-000000000002',
+        `<div>See <a href="${linkedAddress}/" rev="{&quot;isCached&quot;:false}">${linkedAddress}</a> first.</div><div>The end.</div>`,
+      ) +
+      '</en-export>',
+  );
+  execFileSync(importer, [linksExport, dataDirectory], { encoding: 'utf8' });
+  imported.notes += 2;
   console.log(`Imported ${imported.notes} notes and ${imported.attachments} attachments for the run.`);
 }
 
@@ -220,6 +249,21 @@ try {
     return { ...row };
   };
 
+  /** Presses a button a mouse has for going back or forward. */
+  const pointer = await page.context().newCDPSession(page);
+  const mouseButton = async (button) => {
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await pointer.send('Input.dispatchMouseEvent', {
+        type,
+        x: 700,
+        y: 500,
+        button,
+        buttons: type === 'mousePressed' ? (button === 'back' ? 8 : 16) : 0,
+        clickCount: 1,
+      });
+    }
+  };
+
   if (imported) {
     await expect(page.locator('.primary-nav .row-count')).toHaveText(imported.notes.toLocaleString());
     expect(await total()).toBe(imported.notes);
@@ -259,6 +303,51 @@ try {
       await page.getByLabel('Clear search').click();
     }
     check('a note opened from a search is not stored anew, and keeps its date');
+
+    // A link that says only the address of its note is shown by the note's
+    // title, as Evernote shows it. The note goes on saying the address: it
+    // is not stored anew for being shown, and written in, it is stored
+    // with the link as it was.
+    const linking = stored('Says only an address');
+    expect(linking.html).toContain('href="bever://note/');
+    expect(linking.html).toContain(`>${linkedAddress}</a>`);
+    await page.getByLabel('Search notes').fill('intitle:"Says only an address"');
+    await page.getByRole('heading', { name: 'Says only an address', exact: true }).click();
+    const noteLink = page.locator('.note-prose a');
+    await expect(noteLink).toHaveText('Linked to by an address');
+    await expect(page.locator('.note-prose')).not.toContainText('evernote:');
+    await new Promise((done) => setTimeout(done, 1500));
+    expect(stored('Says only an address')).toEqual(linking);
+    await expect(page.locator('.discard-changes')).toHaveCount(0);
+    await page.locator('.note-prose').click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type(' Written here.');
+    await expect
+      .poll(() => stored('Says only an address').revision, { timeout: 15000 })
+      .toBe(linking.revision + 1);
+    const linkingWritten = stored('Says only an address');
+    expect(linkingWritten.html).toContain('Written here.');
+    expect(linkingWritten.html).toContain(`>${linkedAddress}</a>`);
+    expect(linkingWritten.html).not.toContain('data-note');
+    expect(linkingWritten.html).not.toContain('Linked to by an address');
+    await expect(noteLink).toHaveText('Linked to by an address');
+    // Followed with Ctrl, and gone back from by the button a mouse has for
+    // it: one place back, and no further.
+    await noteLink.click({ modifiers: ['Control'] });
+    await expect(page.getByLabel('Note title')).toHaveValue('Linked to by an address');
+    await mouseButton('back');
+    await expect(page.getByLabel('Note title')).toHaveValue('Says only an address');
+    await new Promise((done) => setTimeout(done, 600));
+    await expect(page.getByLabel('Note title')).toHaveValue('Says only an address');
+    await expect(page.getByLabel('Search notes')).toHaveValue('intitle:"Says only an address"');
+    await mouseButton('forward');
+    await expect(page.getByLabel('Note title')).toHaveValue('Linked to by an address');
+    await page.getByRole('button', { name: 'Back', exact: true }).click();
+    await expect(page.getByLabel('Note title')).toHaveValue('Says only an address');
+    await page.getByLabel('Clear search').click();
+    check(
+      'a link that says only an address is shown by its note’s title and stored as it was; a mouse’s button goes back one place',
+    );
 
     // An imported image attachment is served by the bever: protocol.
     await page.getByRole('button', { name: /Filters/ }).click();
@@ -534,7 +623,16 @@ try {
   await expect(page.getByLabel('Note title')).toHaveValue('');
   await page.getByRole('button', { name: 'Forward', exact: true }).click();
   await expect(page.getByLabel('Note title')).toHaveValue('Native smoke note, renamed in a hurry');
-  check('back and forward return to the notes that were open');
+  // And by the buttons of a mouse: a place for a press, not two.
+  await mouseButton('back');
+  await expect(page.getByLabel('Note title')).toHaveValue('');
+  await new Promise((done) => setTimeout(done, 600));
+  await expect(page.getByRole('button', { name: 'Forward', exact: true })).toBeEnabled();
+  await mouseButton('forward');
+  await expect(page.getByLabel('Note title')).toHaveValue('Native smoke note, renamed in a hurry');
+  await new Promise((done) => setTimeout(done, 600));
+  await expect(page.getByRole('button', { name: 'Forward', exact: true })).toBeDisabled();
+  check('back and forward return to the notes that were open, by the buttons and by a mouse');
   // What follows is written in the new, empty note.
   await page.getByRole('button', { name: 'Back', exact: true }).click();
   await expect(page.getByLabel('Note title')).toHaveValue('');

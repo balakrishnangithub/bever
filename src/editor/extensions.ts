@@ -29,6 +29,7 @@ import {
 import StarterKit from '@tiptap/starter-kit';
 import { ReactNodeViewRenderer } from '@tiptap/react';
 
+import { ADDRESS_ATTRIBUTE, TITLE_ATTRIBUTE } from '../lib/noteLinks';
 import { AttachmentView, EncryptedBlockView, ImageView, TodoView } from './nodeViews';
 import { holdsLayout } from './clipSanitizer';
 import { NoteFindExtension } from './noteFind';
@@ -462,6 +463,28 @@ const NoteImage = Image.extend({
   },
 });
 
+/**
+ * Links, which remember what they said while they are shown by the title of
+ * their note; see `noteLinks`.
+ */
+const NoteLink = Link.extend({
+  addAttributes() {
+    const remembered = (name: string) => ({
+      default: null,
+      parseHTML: (element: HTMLElement) => element.getAttribute(name),
+      renderHTML: (attributes: Record<string, unknown>) => {
+        const value = attributes[name === ADDRESS_ATTRIBUTE ? 'noteAddress' : 'noteTitle'];
+        return typeof value === 'string' ? { [name]: value } : {};
+      },
+    });
+    return {
+      ...this.parent?.(),
+      noteAddress: remembered(ADDRESS_ATTRIBUTE),
+      noteTitle: remembered(TITLE_ATTRIBUTE),
+    };
+  },
+});
+
 export function createExtensions() {
   return [
     StarterKit.configure({
@@ -485,7 +508,7 @@ export function createExtensions() {
     Indent,
     TaskList,
     TaskItem.configure({ nested: true }),
-    Link.configure({
+    NoteLink.configure({
       openOnClick: false,
       autolink: true,
       linkOnPaste: true,

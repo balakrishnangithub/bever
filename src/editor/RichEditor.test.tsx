@@ -1,7 +1,9 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import type { Editor } from '@tiptap/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { forgetLinkTitles, learnLinkTitles } from '../lib/noteLinks';
 import type { Note } from '../types';
 import type { FindTerm } from './recognition';
 import { RichEditor } from './RichEditor';
@@ -50,15 +52,15 @@ describe('a note that is opened', () => {
   });
 
   /** Opens the note and returns what the editor then reported of it, in order. */
-  async function opened(highlight: FindTerm[], editable: boolean): Promise<string[]> {
+  async function opened(highlight: FindTerm[], editable: boolean, page = PAGE): Promise<string[]> {
     const reported: string[] = [];
     await act(async () => {
       root.render(
         <RichEditor
-          note={NOTE}
+          note={{ ...NOTE, contentHtml: page }}
           editable={editable}
           contentVersion={0}
-          storedHtml={PAGE}
+          storedHtml={page}
           highlight={highlight}
           onChange={(html) => reported.push(html)}
           onAttachFiles={() => Promise.resolve([])}
@@ -96,5 +98,75 @@ describe('a note that is opened', () => {
 
   it('is not changed when it is opened without a search', async () => {
     expect(await opened([], true)).toEqual([]);
+  });
+
+  describe('with a link that says only the address of a note', () => {
+    const ADDRESS =
+      'evernote:///view/123456/s12/0a1b2c3d-0000-4000-8000-00000000000a/0a1b2c3d-0000-4000-8000-00000000000a';
+    // The demonstration library has the note this leads to, "Welcome to Bever".
+    const LINKED =
+      '<div>Before.</div>' +
+      `<div>See <a href="bever://note/welcome" rev="{&quot;isCached&quot;:false}">${ADDRESS}</a> first.</div>` +
+      '<div>After.</div>';
+    const editorOf = () => (host.querySelector('.note-prose') as unknown as { editor: Editor }).editor;
+
+    beforeEach(async () => {
+      forgetLinkTitles();
+      await learnLinkTitles(LINKED);
+    });
+
+    it('shows the link by the title of its note, and is not changed by that', async () => {
+      const reported = await opened([], true, LINKED);
+      const link = host.querySelector('.note-prose a');
+      expect(link?.textContent).toBe('Welcome to Bever');
+      expect(link?.getAttribute('href')).toBe('bever://note/welcome');
+      expect(host.querySelector('.note-prose')?.textContent).not.toContain('evernote:');
+      expect(reported).toEqual([]);
+    });
+
+    it('is shown so while it is only read, too', async () => {
+      const reported = await opened([], false, LINKED);
+      expect(host.querySelector('.note-prose a')?.textContent).toBe('Welcome to Bever');
+      expect(reported).toEqual([]);
+    });
+
+    it('goes on saying its address in what is stored when the note is written in', async () => {
+      const reported = await opened([], true, LINKED);
+      await act(async () => {
+        editorOf().commands.insertContentAt(editorOf().state.doc.content.size, '<p>More.</p>');
+        await pause(10);
+      });
+      const last = reported.at(-1) ?? '';
+      expect(last).toContain('More.');
+      expect(last).toContain(`>${ADDRESS}</a>`);
+      expect(last).not.toContain('Welcome to Bever');
+      expect(last).not.toContain('data-note');
+      // The page still shows the title.
+      expect(host.querySelector('.note-prose a')?.textContent).toBe('Welcome to Bever');
+      // And taking the writing back leaves the note as it is stored.
+      await act(async () => {
+        editorOf().commands.undo();
+        await pause(10);
+      });
+      expect(reported.at(-1)).toBe(LINKED);
+    });
+
+    it('stores what the link is made to say by hand', async () => {
+      const reported = await opened([], true, LINKED);
+      await act(async () => {
+        const editor = editorOf();
+        let end = 0;
+        editor.state.doc.descendants((node, position) => {
+          if (node.isText && node.marks.some((mark) => mark.type.name === 'link'))
+            end = position + node.nodeSize;
+        });
+        editor.commands.insertContentAt(end, ' and all');
+        await pause(10);
+      });
+      const last = reported.at(-1) ?? '';
+      expect(last).toContain('Welcome to Bever and all');
+      expect(last).not.toContain('evernote:');
+      expect(last).not.toContain('data-note');
+    });
   });
 });

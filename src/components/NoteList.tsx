@@ -40,13 +40,7 @@ const SETTLE_MS = 70;
 /** Empty rows shown while a listing is on its way. */
 const PLACEHOLDERS = 7;
 
-export function NoteList({
-  onOpenSidebar,
-  onOpenNote,
-}: {
-  onOpenSidebar: () => void;
-  onOpenNote: () => void;
-}) {
+export function NoteList({ onOpenSidebar }: { onOpenSidebar: () => void }) {
   const rows = useLibraryStore((state) => state.rows);
   const total = useLibraryStore((state) => state.total);
   const listLoading = useLibraryStore((state) => state.listLoading);
@@ -206,11 +200,7 @@ export function NoteList({
             Empty Trash
           </button>
         ) : (
-          <button
-            className="icon-button mobile-new"
-            onClick={() => void createNote().then(onOpenNote)}
-            aria-label="New note"
-          >
+          <button className="icon-button mobile-new" onClick={() => void createNote()} aria-label="New note">
             <Plus />
           </button>
         )}
@@ -407,7 +397,7 @@ export function NoteList({
                     : 'Create a note and make this space yours.'}
               </p>
               {!filter.query && !filterCount && !filter.trashOnly && (
-                <button onClick={() => void createNote().then(onOpenNote)}>
+                <button onClick={() => void createNote()}>
                   <Plus />
                   New note
                 </button>
@@ -446,10 +436,7 @@ export function NoteList({
                       className={`note-open ${note.thumbnail ? 'with-thumbnail' : ''}`}
                       aria-label={`Open note ${note.title || 'Untitled'}`}
                       aria-current={selectedNote?.id === note.id}
-                      onClick={() => {
-                        void selectNote(note.id);
-                        onOpenNote();
-                      }}
+                      onClick={() => void selectNote(note.id)}
                     >
                       {note.thumbnail && (
                         <img

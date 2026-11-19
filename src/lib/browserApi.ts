@@ -210,6 +210,64 @@ if (new URLSearchParams(window.location.search).has('demoList')) {
   });
 }
 
+// `?demoLinks` adds a note with every kind of link to a note there is: to a
+// note of the library by words and by nothing but Evernote's address, as an
+// import leaves one; to itself; to a note in the trash; to a note that is
+// gone; and Evernote's own links to notes that were never imported, with
+// words and with only an address.
+if (new URLSearchParams(window.location.search).has('demoLinks')) {
+  const guid = '0a1b2c3d-0000-4000-8000-00000000000a';
+  const address = `evernote:///view/123456/s12/${guid}/${guid}`;
+  const blank = {
+    notebookId: inboxId,
+    originalEnml: null,
+    attributes: {},
+    evernoteGuid: null,
+    tags: [],
+    resources: [],
+    revision: 1,
+  };
+  addDemo({
+    ...blank,
+    id: 'linked-to',
+    title: 'Runny nose, day two',
+    contentHtml: '<div>Tea with honey. Back to <a href="bever://note/links">the list of links</a>.</div>',
+    plainText: 'Tea with honey. Back to the list of links.',
+    createdAt: now - 800000,
+    updatedAt: now - 800000,
+    deletedAt: null,
+  });
+  addDemo({
+    ...blank,
+    id: 'linked-trashed',
+    title: 'Thrown away',
+    contentHtml: '<div>A note in the trash.</div>',
+    plainText: 'A note in the trash.',
+    createdAt: now - 810000,
+    updatedAt: now - 810000,
+    deletedAt: now - 700000,
+  });
+  addDemo({
+    ...blank,
+    id: 'links',
+    title: 'Links to notes',
+    contentHtml:
+      '<div>By words: <a href="bever://note/welcome">the welcome note</a>.</div>' +
+      `<div>By its address only: <a href="bever://note/linked-to" rev="{&quot;isCached&quot;:false}">${address}</a> and on.</div>` +
+      '<div>To itself: <a href="bever://note/links">this note</a>.</div>' +
+      '<div>To the trash: <a href="bever://note/linked-trashed">a note thrown away</a>.</div>' +
+      '<div>To nothing: <a href="bever://note/no-such-note">a note that is gone</a>.</div>' +
+      `<div>Not imported, by words: <a href="evernote:///view/123456/s12/${guid.replace('a1', 'ff')}/${guid.replace('a1', 'ff')}/">Welcome to Bever</a>.</div>` +
+      `<div>Not imported, by its address: <a href="${address.replace('0a1b', '9999')}/">${address.replace('0a1b', '9999')}/</a>.</div>` +
+      `<div>Not imported, from the web: <a href="https://www.evernote.com/shard/s12/nl/123456/${guid.replace('a1', 'ee')}">Lossless ENEX import</a>.</div>` +
+      '<div>To the web: <a href="https://example.com/">an example</a>.</div>',
+    plainText: 'Links to notes',
+    createdAt: now - 790000,
+    updatedAt: now - 790000,
+    deletedAt: null,
+  });
+}
+
 // `?demoFiles` adds a note whose attachments are files to read where they
 // are: a text written in Markdown, a script that says it is no particular
 // file, a table of text, an EPUB book, an archive, and a drawing saved as an
@@ -1252,6 +1310,9 @@ export const browserApi: BeverApi = {
   listNotes: demo(listNotes),
   listingTags: demo(listingTags),
   getNote: demo((id: string) => structuredClone(requireNote(id))),
+  noteTitles: demo((ids: string[]) =>
+    Object.fromEntries(ids.flatMap((id) => (notes.has(id) ? [[id, notes.get(id)!.title]] : []))),
+  ),
   createNote: demo((notebookId: string | null) => {
     const timestamp = Date.now();
     const note: Note = {

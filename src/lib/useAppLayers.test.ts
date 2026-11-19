@@ -21,7 +21,7 @@ const arrival = () =>
       new Promise<void>((resolve) => window.addEventListener('popstate', () => resolve(), { once: true })),
   );
 
-describe('layers of the phone layout', () => {
+describe('what lies over the library in the phone layout', () => {
   let root: Root;
   let host: HTMLElement;
 
@@ -73,16 +73,16 @@ describe('layers of the phone layout', () => {
     const entries = window.history.length;
     const back = vi.spyOn(window.history, 'back');
     act(() => {
-      layers.openLayer('editor');
+      layers.openLayer('settings');
       layers.closeLayer('sidebar');
     });
-    expect(layers.layer).toBe('editor');
+    expect(layers.layer).toBe('settings');
     // The note took the drawer's entry; nothing was stepped back.
-    expect(historyLayer()).toBe('editor');
+    expect(historyLayer()).toBe('settings');
     expect(window.history.length).toBe(entries);
     expect(back).not.toHaveBeenCalled();
 
-    act(() => layers.closeLayer('editor'));
+    act(() => layers.closeLayer('settings'));
     await arrival();
     expect(layers.layer).toBeNull();
   });
@@ -91,14 +91,14 @@ describe('layers of the phone layout', () => {
     act(() => layers.openLayer('sidebar'));
     act(() => {
       layers.closeLayer('sidebar');
-      layers.openLayer('editor');
+      layers.openLayer('settings');
     });
-    expect(layers.layer).toBe('editor');
+    expect(layers.layer).toBe('settings');
     await arrival();
-    expect(layers.layer).toBe('editor');
-    expect(historyLayer()).toBe('editor');
+    expect(layers.layer).toBe('settings');
+    expect(historyLayer()).toBe('settings');
 
-    act(() => layers.closeLayer('editor'));
+    act(() => layers.closeLayer('settings'));
     await arrival();
     expect(layers.layer).toBeNull();
     expect(historyLayer()).toBeNull();
@@ -112,6 +112,7 @@ describe('layers of the phone layout', () => {
       layers.closeLayer('settings');
     });
     expect(layers.layer).toBeNull();
+    // And it is the settings that the drawer makes way for, here as above.
     await arrival();
     expect(layers.layer).toBeNull();
     expect(historyLayer()).toBeNull();
