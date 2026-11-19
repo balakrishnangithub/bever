@@ -9,8 +9,11 @@ import {
   isWorthKeeping,
   markAt,
   marksOf,
+  colorOf,
   moved,
   newDocument,
+  recolored,
+  resized,
   parseDocument,
   shapeMark,
   stampMark,
@@ -18,6 +21,8 @@ import {
   textMark,
   textOf,
   toolScale,
+  toolSizes,
+  weightOf,
   withMarks,
   withText,
   type SkObject,
@@ -315,6 +320,113 @@ describe('marks made here, written the way Evernote writes them', () => {
     expect(hits(stamp, { x: 205, y: 95 }, 0)).toBe(true);
     expect(hits(stamp, { x: 160, y: 60 }, 0)).toBe(false);
     expect(boundsOf(moved(stamp, -50, 0)).x).toBe(125);
+  });
+
+  it('makes a mark that is there as large as the tools now draw', () => {
+    const unit = 2;
+    const pen = { color: '#e8262d', width: toolSizes(5, unit).pen };
+    const larger = toolSizes(9, unit);
+    const smaller = toolSizes(2, unit);
+
+    // A line is thicker and runs where it ran.
+    const stroke = strokeMark(
+      [
+        { x: 10, y: 10 },
+        { x: 60, y: 40 },
+      ],
+      pen,
+      false,
+      'a',
+    );
+    expect(weightOf(stroke, unit)).toBe(5);
+    expect(resized(stroke, larger)).toEqual({ ...stroke, lineWidth: 28.8 });
+    expect(weightOf(resized(stroke, larger), unit)).toBe(9);
+    // A highlighter stays twice as wide as a pen, and as see-through.
+    const marker = strokeMark(
+      [
+        { x: 10, y: 10 },
+        { x: 60, y: 40 },
+      ],
+      pen,
+      true,
+      'b',
+    );
+    expect(weightOf(marker, unit)).toBe(5);
+    expect(resized(marker, smaller)).toEqual({ ...marker, lineWidth: 12.8 });
+    // A rectangle keeps its corners.
+    const box = shapeMark('rectangle', { x: 10, y: 10 }, { x: 110, y: 60 }, pen, 'c');
+    expect(resized(box, larger)).toEqual({ ...box, lineWidth: 28.8 });
+
+    // An arrow keeps its ends and gets the head and shaft of a thicker one.
+    const arrow = shapeMark('arrow', { x: 20, y: 20 }, { x: 220, y: 120 }, pen, 'd');
+    const thick = resized(arrow, larger);
+    expect(thick).toEqual({
+      ...shapeMark('arrow', { x: 20, y: 20 }, { x: 220, y: 120 }, { ...pen, width: larger.pen }, 'd'),
+    });
+    expect(thick.path).not.toBe(arrow.path);
+    expect(weightOf(thick, unit)).toBe(9);
+    expect(boundsOf(thick)).toEqual(boundsOf(arrow));
+
+    // A text's letters are higher from the same corner, and say the same.
+    const text = textMark('Here', { x: 30, y: 40 }, toolSizes(5, unit).text, '#e8262d', 'e');
+    expect(weightOf(text, unit)).toBe(5);
+    const tall = resized(text, larger);
+    expect(tall).toEqual({ ...text, font: { name: 'Helvetica,Arial', size: 72 }, lineWidth: 24 });
+    expect(boundsOf(tall).height).toBeGreaterThan(boundsOf(text).height);
+    expect({ x: boundsOf(tall).x, y: boundsOf(tall).y }).toEqual({ x: 30, y: 40 });
+
+    // A stamp grows about its middle.
+    const stamp = stampMark('approved', { x: 100, y: 100 }, toolSizes(5, unit).stamp, 'f');
+    expect(weightOf(stamp, unit)).toBe(5);
+    const wide = resized(stamp, larger);
+    expect(wide.frame).toEqual({ x: -48, y: -48, width: 296, height: 296 });
+    expect(weightOf(wide, unit)).toBe(9);
+
+    // A mark from elsewhere, of a size the slider does not have, is read as the nearest it has.
+    expect(weightOf({ type: 'Vector', path: 'M 0 0 L 9 9', lineWidth: 400 }, unit)).toBe(10);
+    expect(weightOf({ type: 'Text', text: 'x', font: { size: 4 } }, unit)).toBe(1);
+  });
+
+  it('gives a mark that is there another colour', () => {
+    const pen = { color: '#e8262d', width: 8 };
+    const stroke = strokeMark(
+      [
+        { x: 10, y: 10 },
+        { x: 60, y: 40 },
+      ],
+      pen,
+      false,
+      'a',
+    );
+    expect(colorOf(stroke)).toBe('#e8262d');
+    expect(recolored(stroke, '#1c7ed6')).toEqual({
+      ...stroke,
+      strokeColor: { red: 28, green: 126, blue: 214, alpha: 1 },
+    });
+    // A highlighter stays see-through.
+    const marker = strokeMark(
+      [
+        { x: 10, y: 10 },
+        { x: 60, y: 40 },
+      ],
+      pen,
+      true,
+      'b',
+    );
+    expect(recolored(marker, '#1c7ed6').strokeColor).toEqual({ red: 28, green: 126, blue: 214, alpha: 0.4 });
+    // An arrow is filled, not outlined.
+    const arrow = shapeMark('arrow', { x: 20, y: 20 }, { x: 220, y: 120 }, pen, 'c');
+    expect(colorOf(arrow)).toBe('#e8262d');
+    const blue = recolored(arrow, '#1c7ed6');
+    expect(blue.fillColor).toEqual({ red: 28, green: 126, blue: 214, alpha: 1 });
+    expect(blue.strokeColor).toBeUndefined();
+    // Light letters get a dark edge, as a text written in that colour has.
+    const text = textMark('Here', { x: 30, y: 40 }, 24, '#e8262d', 'd');
+    expect(recolored(text, '#ffffff')).toEqual({ ...textMark('Here', { x: 30, y: 40 }, 24, '#ffffff', 'd') });
+    // A stamp's colour says what it is.
+    const stamp = stampMark('approved', { x: 100, y: 100 }, 100, 'e');
+    expect(colorOf(stamp)).toBeNull();
+    expect(recolored(stamp, '#1c7ed6')).toBe(stamp);
   });
 
   it('does not keep a shape with no size or an empty text', () => {

@@ -2492,6 +2492,131 @@ kbd {
   margin: 0 20px;
   text-align: center;
 }
+/* A text, a table, a book or an archive's list, in the frame a PDF has. */
+.preview-scroll {
+  grid-area: 1 / 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border-radius: 7px;
+  outline: 0;
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
+  background: var(--panel);
+  color: var(--ink);
+  --page-ink: var(--ink);
+  --page-muted: var(--muted);
+  --page-line: var(--line);
+  --page-link: var(--accent-strong);
+  --page-shade: var(--bg);
+}
+/* A book is printed: its own colours are meant for white paper. */
+.file-preview.paper .preview-scroll {
+  background: #ffffff;
+  color: #1f2328;
+  --page-ink: #1f2328;
+  --page-muted: #57606a;
+  --page-line: #d0d7de;
+  --page-link: #1a5fb4;
+  --page-shade: #f3f4f6;
+}
+.preview-note {
+  margin: 0;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-family: Inter, sans-serif;
+  font-size: 12px;
+}
+.preview-text {
+  margin: 0;
+  padding: 14px 16px 40px;
+  font-family: 'JetBrains Mono', Consolas, 'Courier New', monospace;
+  font-size: 0.87em;
+  line-height: 1.55;
+  tab-size: 4;
+  white-space: pre;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.preview-text.wrapped {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.preview-table {
+  margin: 12px 14px 40px;
+  border-collapse: collapse;
+  font-family: Inter, sans-serif;
+  font-size: 0.87em;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.preview-table th,
+.preview-table td {
+  max-width: 34em;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.preview-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  font-weight: 600;
+}
+.preview-files td:last-child,
+.preview-files th:last-child {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.preview-page {
+  user-select: text;
+  -webkit-user-select: text;
+}
+.preview-next {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 28px);
+  margin: 0 auto 40px;
+  padding: 9px 14px;
+  border: 1px solid #d0d7de;
+  border-radius: 7px;
+  color: #1a5fb4;
+  font-family: Inter, sans-serif;
+  font-size: 13px;
+  text-align: left;
+}
+.preview-next svg {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+}
+.preview-chapters {
+  max-width: min(32vw, 280px);
+  padding: 5px 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  text-overflow: ellipsis;
+}
+.preview-as {
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.preview-as:hover {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
 /* The pages move in it both ways. Two fingers are the application's to
    answer (pinch-zoom is left out), and while they are down nothing scrolls
    but what the application moves. */
@@ -2577,8 +2702,12 @@ kbd {
     margin: 0 6px 6px 12px;
   }
   .pdf-frame,
-  .pdf-scroll {
+  .pdf-scroll,
+  .preview-scroll {
     border-radius: 0;
+  }
+  .preview-chapters {
+    max-width: 38vw;
   }
   /* Scrolling steps through the pages, and fingers change the size. */
   .pdf-step,

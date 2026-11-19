@@ -1148,6 +1148,187 @@ try {
     await context.close();
   }
 
+  // Files are read where they are: a text written in Markdown, a script, a
+  // table of text, an EPUB book, the list of an archive. And a drawing
+  // stored as an unknown file is shown as the picture it is. Wide, and on a
+  // phone, where Back closes a preview.
+  for (const [where, viewport, touch] of [
+    ['a wide window', { width: 1280, height: 860 }, false],
+    ['a phone', { width: 390, height: 844 }, true],
+  ]) {
+    const context = await browser.newContext({ viewport, hasTouch: touch, isMobile: touch });
+    const reading = await context.newPage();
+    reading.on('pageerror', (error) => errors.push(error.message));
+    reading.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    // Nothing a file names on the web is asked for.
+    const asked = [];
+    reading.on('request', (request) => {
+      if (request.url().includes('example.')) asked.push(request.url());
+    });
+    await reading.goto('http://127.0.0.1:7100/?demoFiles', { waitUntil: 'domcontentloaded' });
+    await reading.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+    const press = (locator) => (touch ? locator.tap() : locator.click());
+    await press(reading.locator('.note-card', { hasText: 'Files to read' }).getByRole('heading'));
+    const offered = reading.locator('.attachment-preview-button');
+    await expect(offered).toHaveText([
+      'Preview',
+      'Preview text',
+      'Preview table',
+      'Read book',
+      'List contents',
+    ]);
+    // The drawing that says it is "a file" is drawn.
+    const drawn = reading.locator('.note-prose .attachment-image img');
+    await expect(drawn).toHaveCount(1);
+    await expect.poll(() => drawn.evaluate((image) => image.naturalWidth)).toBe(120);
+
+    const dialog = reading.getByRole('dialog', { name: /^Preview / });
+    const shown = reading.locator('.preview-scroll[aria-busy="false"]');
+    /** What a page drawn in a tree of its own holds. */
+    const inPage = (selector) =>
+      reading.evaluate(
+        (wanted) =>
+          [...(document.querySelector('.preview-page')?.shadowRoot?.querySelectorAll(wanted) ?? [])].map(
+            (element) => element.textContent ?? '',
+          ),
+        selector,
+      );
+    const close = async () => {
+      if (touch) await reading.goBack();
+      else await press(reading.getByRole('button', { name: 'Close preview' }));
+      await expect(dialog).toHaveCount(0);
+      // The note is still the one open under it.
+      await expect(reading.getByLabel('Note title')).toHaveValue('Files to read');
+    };
+
+    // Markdown, as it reads: a heading, a table, a list with its boxes; and
+    // as it is written. What it would run does not run.
+    await press(offered.nth(0));
+    await expect(dialog).toHaveAttribute('aria-label', 'Preview Field notes.md');
+    await expect(shown).toBeVisible();
+    expect(await inPage('h1')).toEqual(['Field notes']);
+    expect(await inPage('strong')).toEqual(['north bank']);
+    expect(await inPage('td')).toEqual(['Beaver', '2']);
+    expect((await inPage('li')).map((item) => item.trim())).toEqual(['☑ a lodge', '☐ the dam']);
+    expect(await inPage('script, img')).toEqual([]);
+    expect(await reading.title()).not.toBe('ran');
+    await checkFullyInViewport(reading, reading.locator('.pdf-modal'));
+    await reading.screenshot({
+      path: `test-results/bever-preview-markdown-${touch ? 'mobile' : 'desktop'}.png`,
+    });
+    await press(dialog.getByRole('button', { name: 'As text' }));
+    await expect(reading.locator('.preview-text')).toContainText('# Field notes');
+    await press(dialog.getByRole('button', { name: 'Formatted' }));
+    await expect(reading.locator('.preview-text')).toHaveCount(0);
+    // The text is made larger by its button.
+    const sizeOf = () => shown.evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize));
+    const before = await sizeOf();
+    await press(dialog.getByRole('button', { name: 'Make the text larger' }));
+    expect(await sizeOf()).toBeGreaterThan(before);
+    await close();
+
+    // A script, whatever it says it is.
+    await press(offered.nth(1));
+    await expect(reading.locator('.preview-text')).toContainText('def count(animals):');
+    await close();
+
+    // A table of text, with a comma inside a value.
+    await press(offered.nth(2));
+    await expect(reading.locator('.preview-table th')).toHaveText(['Animal', 'Place', 'Seen']);
+    await expect(reading.locator('.preview-table td').nth(1)).toHaveText('North bank, upstream');
+    await close();
+
+    // A book: its title, its chapters by their names, the picture it holds,
+    // nothing from the web, no script; a link to another chapter goes there.
+    await press(offered.nth(3));
+    await expect(dialog.locator('header strong')).toHaveText('Rivers of the North');
+    const chapters = dialog.getByLabel('Chapter', { exact: true });
+    await expect(chapters.locator('option')).toHaveText(['The source', 'The mouth']);
+    await expect(shown).toBeVisible();
+    expect(await inPage('h1')).toEqual(['The source']);
+    await expect
+      .poll(() =>
+        reading.evaluate(() =>
+          [...(document.querySelector('.preview-page')?.shadowRoot?.querySelectorAll('img') ?? [])].map(
+            (image) => image.naturalWidth,
+          ),
+        ),
+      )
+      .toEqual([120]);
+    expect(await reading.title()).not.toBe('ran');
+    await reading.screenshot({ path: `test-results/bever-preview-book-${touch ? 'mobile' : 'desktop'}.png` });
+    await reading.evaluate(() =>
+      document.querySelector('.preview-page').shadowRoot.querySelector('a[href="#chapter-1"]').click(),
+    );
+    await expect(chapters).toHaveValue('1');
+    await expect.poll(() => inPage('h1')).toEqual(['The mouth']);
+    await expect(dialog.getByRole('button', { name: 'Next chapter' })).toBeDisabled();
+    await press(dialog.getByRole('button', { name: 'Previous chapter' }));
+    await expect.poll(() => inPage('h1')).toEqual(['The source']);
+    // At a chapter's end the next one is one press away, and begins at its top.
+    await shown.evaluate((element) => element.scrollTo(0, element.scrollHeight));
+    await press(dialog.getByRole('button', { name: /^Next: The mouth/ }));
+    await expect.poll(() => inPage('h1')).toEqual(['The mouth']);
+    expect(await shown.evaluate((element) => element.scrollTop)).toBe(0);
+    await close();
+
+    // An archive: what it holds.
+    await press(offered.nth(4));
+    await expect(reading.locator('.preview-note')).toHaveText('2 files, 50 B unpacked.');
+    await expect(reading.locator('.preview-files td:first-child')).toHaveText([
+      'survey/readme.txt',
+      'survey/data/sightings.csv',
+    ]);
+    await close();
+    expect(asked, `asked of the web by a preview in ${where}`).toEqual([]);
+    await context.close();
+  }
+
+  // What pdf.js fetches while it draws is served with the interface: the
+  // decoders of scanned pages, the fonts, the character maps.
+  for (const part of [
+    'wasm/jbig2.wasm',
+    'wasm/openjpeg.wasm',
+    'standard_fonts/LiberationSans-Regular.ttf',
+    'cmaps/UniJIS-UTF16-H.bcmap',
+    'iccs/CGATS001Compat-v2-micro.icc',
+  ]) {
+    const response = await fetch(`http://127.0.0.1:7100/pdfjs/${part}`);
+    expect(response.status, `pdfjs/${part}`).toBe(200);
+    expect((await response.arrayBuffer()).byteLength, `pdfjs/${part}`).toBeGreaterThan(1000);
+  }
+
+  // A link to another note is followed by Bever and never by the browser:
+  // also in a note that is only read, where a link is an ordinary link to
+  // the browser, and also when it is touched.
+  for (const [viewport, touch] of [
+    [{ width: 1280, height: 860 }, false],
+    [{ width: 390, height: 844 }, true],
+  ]) {
+    const context = await browser.newContext({ viewport, hasTouch: touch, isMobile: touch });
+    const linked = await context.newPage();
+    linked.on('pageerror', (error) => errors.push(error.message));
+    linked.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    await linked.addInitScript(() => window.localStorage.setItem('bever.openReadOnly', 'on'));
+    await linked.goto('http://127.0.0.1:7100/', { waitUntil: 'domcontentloaded' });
+    await linked.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+    const press = (locator) => (touch ? locator.tap() : locator.click());
+    await press(linked.locator('.note-card', { hasText: 'Bring your notes along' }).getByRole('heading'));
+    await expect(linked.getByText('Read-only', { exact: true })).toBeVisible();
+    const link = linked.locator('.note-prose a[href="bever://note/welcome"]');
+    await link.scrollIntoViewIfNeeded();
+    await press(link);
+    await expect(linked.getByLabel('Note title')).toHaveValue('Welcome to Bever');
+    // An address the browser was sent to would be reported as one it cannot open.
+    await linked.waitForTimeout(300);
+    expect(new URL(linked.url()).origin).toBe('http://127.0.0.1:7100');
+    await context.close();
+  }
+
   // A picture annotated in Evernote: its marks are separate things that can
   // be moved, reworded and removed, and new ones are stored the same way.
   const annotated = await browser.newPage({ viewport: { width: 1440, height: 920 }, deviceScale: 1 });
@@ -1276,6 +1457,39 @@ try {
   await expect(drawing).toHaveAttribute('data-marks', '5');
   await expect(removeMark).toBeDisabled();
   await tools.getByRole('button', { name: 'Undo' }).click();
+  await expect(drawing).toHaveAttribute('data-marks', '6');
+  // A selected mark takes the size chosen while it is selected: the pen's
+  // stroke, which runs through (80, 235), is made twice as thick, and
+  // reaches six pixels under its middle then, where it did not before.
+  const onStroke = await pixel(80, 235);
+  const underStroke = await pixel(80, 241);
+  expect(underStroke).not.toBe(onStroke);
+  await annotated.mouse.click(...(await onScreen(80, 235)));
+  await expect(removeMark).toBeEnabled();
+  await tools.getByRole('button', { name: 'Thickness and text size' }).click();
+  const slider = annotated.getByRole('menu', { name: 'Thickness and text size' }).getByRole('slider');
+  // The slider shows what the mark has.
+  await expect(slider).toHaveValue('5');
+  await slider.fill('8');
+  await slider.fill('10');
+  await expect.poll(() => pixel(80, 241)).toBe(onStroke);
+  await expect(drawing).toHaveAttribute('data-marks', '6');
+  // However far the slider went, it is one step to take back.
+  await tools.getByRole('button', { name: 'Undo' }).click();
+  await expect.poll(() => pixel(80, 241)).toBe(underStroke);
+  await tools.getByRole('button', { name: 'Redo' }).click();
+  await expect.poll(() => pixel(80, 241)).toBe(onStroke);
+  await tools.getByRole('button', { name: 'Undo' }).click();
+  // And the colour chosen while it is selected.
+  await annotated.mouse.click(...(await onScreen(80, 235)));
+  await tools.getByRole('button', { name: 'Colour' }).click();
+  await annotated
+    .getByRole('menu', { name: 'Colour' })
+    .getByRole('menuitemradio', { name: '#00e800' })
+    .click();
+  await expect.poll(() => pixel(80, 235)).not.toBe(onStroke);
+  await tools.getByRole('button', { name: 'Undo' }).click();
+  await expect.poll(() => pixel(80, 235)).toBe(onStroke);
   await expect(drawing).toHaveAttribute('data-marks', '6');
   await annotated.screenshot({ path: 'test-results/bever-annotator-edited.png', fullPage: true });
   await annotated.getByRole('button', { name: 'Save', exact: true }).click();

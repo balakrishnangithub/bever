@@ -20,6 +20,18 @@ export interface ClipOptions {
   resource: (hash: string) => ClipResource | null;
   /** Whether images that live on the web may be requested. */
   allowRemote: boolean;
+  /**
+   * Where an image is that the markup names by a path of its own, as a
+   * chapter of a book names the pictures in the book. Without it, and when
+   * it answers null, such an image is left out.
+   */
+  image?: (source: string) => string | null;
+  /**
+   * What a link becomes whose address is not one for the web or for a
+   * note: a link from one chapter of a book to another. Without it, and
+   * when it answers null, such a link keeps its text and loses its address.
+   */
+  link?: (address: string) => string | null;
 }
 
 export interface SanitizedClip {
@@ -166,10 +178,14 @@ export function editableMarkup(html: string): string {
 
 export function sanitizeClip(html: string, options: ClipOptions): SanitizedClip {
   // A parsed document is inert: it runs no script and requests nothing.
-  const source = new DOMParser().parseFromString(html, 'text/html');
+  return sanitizeNode(new DOMParser().parseFromString(html, 'text/html').body, options);
+}
+
+/** What is inside `root`, an element of a parsed document, made safe to show. */
+export function sanitizeNode(root: Node, options: ClipOptions): SanitizedClip {
   const state = { blockedRemote: 0 };
   const content = document.createDocumentFragment();
-  copyChildren(source.body, content, options, state);
+  copyChildren(root, content, options, state);
   return { content, blockedRemote: state.blockedRemote };
 }
 
@@ -224,7 +240,8 @@ function copyChildren(
     copyAttributes(element, copy, options, state);
     if (name === 'a') {
       const href = element.getAttribute('href')?.trim() ?? '';
-      if (LINK.test(href)) copy.setAttribute('href', href);
+      const address = LINK.test(href) ? href : href ? (options.link?.(href) ?? null) : null;
+      if (address) copy.setAttribute('href', address);
       copy.setAttribute('rel', 'noopener noreferrer');
     }
     copyChildren(element, copy, options, state, depth + 1);
@@ -252,14 +269,15 @@ function copyAttributes(
 function imageElement(element: Element, options: ClipOptions, state: { blockedRemote: number }) {
   const source = element.getAttribute('src')?.trim() ?? '';
   const remote = REMOTE.test(source);
-  if (!EMBEDDED_IMAGE.test(source) && !remote) return null;
+  const local = EMBEDDED_IMAGE.test(source) || remote || !source ? null : (options.image?.(source) ?? null);
+  if (!EMBEDDED_IMAGE.test(source) && !remote && !local) return null;
   if (remote && !options.allowRemote) {
     state.blockedRemote += 1;
     return null;
   }
   const image = document.createElement('img');
   copyAttributes(element, image, options, state);
-  image.setAttribute('src', source);
+  image.setAttribute('src', local ?? source);
   image.setAttribute('referrerpolicy', 'no-referrer');
   image.setAttribute('loading', 'lazy');
   return image;

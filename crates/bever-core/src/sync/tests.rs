@@ -241,6 +241,61 @@ fn an_edit_costs_the_two_listings_and_one_transfer() {
 }
 
 #[test]
+fn a_change_that_was_discarded_is_not_sent() {
+    let remote = MemoryRemote::new();
+    let (first, second) = (Device::new(), Device::new());
+    let id = first.add("Text", "Body", &["tag"]);
+    first.sync(&remote);
+    second.sync(&remote);
+    first.sync(&remote);
+    remote.take_uploads();
+    let synced = first.note(&id);
+
+    // Written in by mistake, saved by itself, and put back: the editor
+    // keeps the note before the first save of a visit.
+    let kept = first.library.keep_note_version(&id).unwrap().unwrap();
+    first.edit(&id, "Text", "Bodyxxxx", &[]);
+    let restored = first.library.restore_note_version(&id, kept).unwrap();
+    assert_eq!(essence(&restored), essence(&synced));
+    assert!(restored.revision > synced.revision);
+
+    let before = remote.requests();
+    let report = first.sync(&remote);
+    assert_eq!((report.pushed, report.pulled), (0, 0));
+    assert_eq!(
+        remote.requests() - before,
+        2,
+        "the two listings, and no transfer"
+    );
+    assert!(note_uploads(&remote).is_empty());
+    // And it is settled: the next run does not look at the note again.
+    assert_eq!(first.sync(&remote).pushed, 0);
+    assert_eq!(second.sync(&remote).pulled, 0);
+
+    // A change that stays is sent as ever, and taken by the other device,
+    // although this library's count of the note's changes ran ahead.
+    first.edit(&id, "Text", "Edited", &["tag"]);
+    assert_eq!(first.sync(&remote).pushed, 1);
+    assert_eq!(second.sync(&remote).pulled, 1);
+    assert_eq!(essence(&second.note(&id)), essence(&first.note(&id)));
+    // The other way too.
+    second.edit(&id, "Text", "Edited there", &["tag"]);
+    assert_eq!(second.sync(&remote).pushed, 1);
+    assert_eq!(first.sync(&remote).pulled, 1);
+    assert_eq!(first.note(&id).content_html, "<p>Edited there</p>");
+
+    // A discarded change that was sent before it was discarded is another
+    // matter: the remote has the change, and what was put back must go.
+    let kept = first.library.keep_note_version(&id).unwrap().unwrap();
+    first.edit(&id, "Text", "Spoilt", &["tag"]);
+    assert_eq!(first.sync(&remote).pushed, 1);
+    first.library.restore_note_version(&id, kept).unwrap();
+    assert_eq!(first.sync(&remote).pushed, 1);
+    assert_eq!(second.sync(&remote).pulled, 1);
+    assert_eq!(second.note(&id).content_html, "<p>Edited there</p>");
+}
+
+#[test]
 fn notes_are_uploaded_together() {
     let remote = MemoryRemote::new();
     let (first, second) = (Device::new(), Device::new());

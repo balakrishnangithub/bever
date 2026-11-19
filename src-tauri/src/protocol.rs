@@ -65,6 +65,16 @@ fn respond(app: &AppHandle, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
         return plain(StatusCode::NOT_FOUND, "attachment file is missing");
     };
     let total = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+    // A picture saved from the web is often stored as "a file" and no more.
+    // The page shows it by its name; it is told here what it is, since the
+    // page is not let guess (`nosniff`, below).
+    let mime = if says_nothing(&resource.mime) {
+        let mut head = Vec::with_capacity(HEAD_BYTES as usize);
+        let _ = (&mut file).take(HEAD_BYTES).read_to_end(&mut head);
+        picture_type(&head).map_or_else(|| resource.mime.clone(), str::to_owned)
+    } else {
+        resource.mime.clone()
+    };
     let requested = request
         .headers()
         .get(header::RANGE)
@@ -101,7 +111,7 @@ fn respond(app: &AppHandle, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
         .replace('+', "%20");
     let mut response = Response::builder()
         .status(status)
-        .header(header::CONTENT_TYPE, resource.mime)
+        .header(header::CONTENT_TYPE, mime)
         .header(header::ACCEPT_RANGES, "bytes")
         .header(
             header::CONTENT_DISPOSITION,
@@ -122,6 +132,64 @@ fn respond(app: &AppHandle, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
         );
     }
     response.body(bytes).expect("valid attachment response")
+}
+
+/// How much of a file's beginning is looked at to tell what picture it is.
+const HEAD_BYTES: u64 = 512;
+
+/// Whether a type says no more than that the attachment is a file.
+fn says_nothing(mime: &str) -> bool {
+    matches!(
+        mime.trim().to_ascii_lowercase().as_str(),
+        "" | "application/octet-stream" | "binary/octet-stream" | "application/x-download"
+    )
+}
+
+/// The type of the picture a file begins as, for the kinds the page can
+/// draw; `None` for anything else.
+fn picture_type(head: &[u8]) -> Option<&'static str> {
+    if head.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some("image/png");
+    }
+    if head.starts_with(b"\xff\xd8\xff") {
+        return Some("image/jpeg");
+    }
+    if head.starts_with(b"GIF87a") || head.starts_with(b"GIF89a") {
+        return Some("image/gif");
+    }
+    if head.len() >= 12 && head.starts_with(b"RIFF") && &head[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    if head.len() >= 12 && &head[4..8] == b"ftyp" && matches!(&head[8..12], b"avif" | b"avis") {
+        return Some("image/avif");
+    }
+    if head.starts_with(b"BM") && head.len() >= 26 {
+        return Some("image/bmp");
+    }
+    // A drawing is text: after what may stand before it (a mark of the
+    // encoding, an XML declaration, comments, a document type), its first
+    // element is `svg`.
+    let text = String::from_utf8_lossy(head);
+    let mut rest = text.trim_start_matches('\u{feff}').trim_start();
+    loop {
+        let skipped = if rest.starts_with("<?") {
+            rest.find("?>").map(|end| end + 2)
+        } else if rest.starts_with("<!--") {
+            rest.find("-->").map(|end| end + 3)
+        } else if rest.starts_with("<!") {
+            rest.find('>').map(|end| end + 1)
+        } else {
+            break;
+        };
+        rest = rest[skipped?..].trim_start();
+    }
+    let name = rest.strip_prefix('<')?;
+    (name.starts_with("svg")
+        && name[3..]
+            .chars()
+            .next()
+            .is_some_and(|next| next.is_whitespace() || next == '>' || next == '/'))
+    .then_some("image/svg+xml")
 }
 
 /// An error the page can read. Without the cross-origin header the page sees
@@ -163,7 +231,53 @@ fn parse_range(value: &str, total: u64) -> Option<(u64, u64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_range;
+    use super::{parse_range, picture_type, says_nothing};
+
+    #[test]
+    fn a_picture_stored_as_an_unknown_file_is_told_by_how_it_begins() {
+        assert!(says_nothing("application/octet-stream"));
+        assert!(says_nothing(" Application/Octet-Stream "));
+        assert!(says_nothing(""));
+        assert!(!says_nothing("image/png"));
+        assert!(!says_nothing("application/pdf"));
+
+        assert_eq!(
+            picture_type(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"),
+            Some("image/png")
+        );
+        assert_eq!(
+            picture_type(b"\xff\xd8\xff\xe0\0\x10JFIF"),
+            Some("image/jpeg")
+        );
+        assert_eq!(picture_type(b"GIF89a\x01\0\x01\0"), Some("image/gif"));
+        assert_eq!(picture_type(b"RIFF\x24\0\0\0WEBPVP8 "), Some("image/webp"));
+        assert_eq!(
+            picture_type(b"\0\0\0\x1cftypavif\0\0\0\0"),
+            Some("image/avif")
+        );
+        assert_eq!(
+            picture_type(b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\"/>"),
+            Some("image/svg+xml")
+        );
+        assert_eq!(
+            picture_type(
+                "\u{feff}<?xml version=\"1.0\"?>\n<!-- drawn -->\n<!DOCTYPE svg PUBLIC \"x\" \"y\">\n<svg>"
+                    .as_bytes()
+            ),
+            Some("image/svg+xml")
+        );
+        // What is not a picture stays what it was said to be.
+        assert_eq!(picture_type(b"%PDF-1.7"), None);
+        assert_eq!(picture_type(b"PK\x03\x04"), None);
+        assert_eq!(picture_type(b"<html><body><svg></svg></body></html>"), None);
+        assert_eq!(picture_type(b"<svgs>"), None);
+        assert_eq!(picture_type(b"<?xml version=\"1.0\"?><note/>"), None);
+        assert_eq!(picture_type(b"<?xml never closed"), None);
+        assert_eq!(picture_type(b"RIFF\x24\0\0\0WAVEfmt "), None);
+        assert_eq!(picture_type(b"\0\0\0\x1cftypisom\0\0\0\0"), None);
+        assert_eq!(picture_type(b""), None);
+        assert_eq!(picture_type(b"BM"), None);
+    }
 
     #[test]
     fn ranges_are_resolved_against_the_file_size() {

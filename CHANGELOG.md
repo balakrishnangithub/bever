@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.4.0 — 2026-11-19
+
+Books, texts and archives are read where they are, as PDFs are. Scanned pages of a PDF are drawn with their pictures. A mark on a picture takes the size and the colour chosen while it is selected. A link to another note works in a note that is only read. A change that was discarded is not sent by the next synchronization.
+
+### Added
+
+- **An EPUB book is read in a preview.** _Read book_ on the attachment opens it over the window: a chapter at a time, in the order the book has them and under the names its table of contents gives them, with the pictures of the book. The chapters are chosen from a list or stepped through with the buttons, the arrow keys, or the button at a chapter's end; a link from one chapter to another goes there. The text is made larger and smaller with the buttons or + and −. A book is printed on white, whichever theme the application has. Only the chapter being read is unpacked, so a book of a hundred megabytes opens as fast as a small one.
+- **A text written in Markdown is shown as it reads**, with its headings, lists, tables and code, and as it is written at the press of a button.
+- **Plain texts and source code are read in a preview**: files that say they are text, and files that say nothing but have the name of one (`.py`, `.json`, `.css`, `.sql` and some ninety other endings). The first two megabytes of a longer one are shown.
+- **A table of text (CSV, TSV) is shown as a table**, its first row as the headings; the divider is found from the file, and quoted values may hold commas and line breaks.
+- **A ZIP archive lists what it holds**: the names and sizes of its files, without unpacking any.
+- **A picture stored as a file of no particular kind is shown as a picture.** A picture saved from the web often says only that it is a file. With a picture's name (`.jpg`, `.png`, `.svg`, `.webp`, `.avif`, `.gif`) it is now drawn in the note, and the application tells the page what picture it is from how the file begins.
+
+All of these are read on the device. A book, a Markdown text and an archive are as little trusted as a note: scripts and style sheets in them are left out, nothing they name on the web is fetched (pictures on the web only where the setting for them allows it), and an archive is believed in nothing it says about its own sizes.
+
+### Changed
+
+- **A selected mark on a picture takes the size and the colour chosen for it.** The slider and the colours of the picture editor were for what is drawn next, and a mark that was already there kept what it had, selected or not. Now, with a mark selected, the slider shows the size that mark has and changes it: a line or a shape is drawn thicker or thinner, an arrow gets the head and shaft of a thicker one between the same two ends, a text's letters are higher from the same corner, a stamp is larger about its middle. A colour chosen then is the mark's. Moving the slider is one step to undo, however far it went.
+- **A stamp is as large as the slider says**, as everything else drawn on a picture is; at the slider's middle it is the size it always was.
+
+### Fixed
+
+- **Pages of a PDF drawn without their pictures.** Scanned documents are pictures in formats (JBIG2, JPEG 2000) whose decoders pdf.js fetches when a document needs them, as it fetches the fonts a PDF names without carrying them and the character maps of East Asian text. None of these came with the application, so such a page was drawn with what was left: often a blank sheet with a line or two. They come with it now, each with its licence, 3.7 megabytes in all.
+- **A link to another note, touched in a note that is only read.** In a note open for reading a link is an ordinary link to the web view. Bever followed it at once, which took the note off the page while the touch was still under way, and the web view, left with a link that was in no page, went to its address: `bever://note/…`, which is no page. The link's own effect is now prevented, and the link followed when the touch is over. With a mouse, and in a note being written, links worked. It was found in a phone-sized browser window with touches, which is where a phone with notes set to open read-only would meet it.
+- **A discarded change was sent by the next synchronization.** A note changed by mistake and put back with _Discard changes_ is, date and all, the note the other devices have; it was uploaded all the same, because it had been saved twice since. Such a note is now recognised by its content and not sent. Where the change itself was synchronized before it was discarded, what was put back is sent, as it must be.
+
+### Compatibility
+
+- Nothing changes in how notes are kept or synchronized, and nothing that worked is taken away. A library of 1.0.0 or later is opened as it is.
+
+### What was verified
+
+- **The PDF that was reported,** a scanned book of 267 pages: in a browser and in the built Windows application, pages 16 to 18 were about one hundredth drawn before (0.9 to 2.3% of the page not white) and are a fifth to a quarter drawn now (16 to 27%), and pdf.js, which had warned of every picture it left out, says nothing. Of the 234 PDFs of the library it came from, at least 9 hold pictures of these two kinds.
+- **Nine real EPUB books,** of 15 to 812 chapters, in the built Windows application: each opened in 0.1 to 1.1 seconds; of the first eight chapters of each, every one was read and every picture drawn (72 chapters, 72 pictures); nothing was reported by the page.
+- **In the built Windows application** (`npm run test:native`): a Markdown text pasted into a note is fetched from the attachment store by ranges and shown as it reads, with the script in it left out; a drawing pasted as an unknown file is served as `image/svg+xml` and drawn. The general check passed (28 checks with an empty library, 32 with an export that holds PDFs), and so did the synchronization check against a stand-in for pCloud (`npm run test:sync`: 13 and 12).
+- **In the browser check,** wide and in a phone's window with touches: the five previews (a Markdown text, a script, a table, a book with a picture and a link between its chapters, an archive), each closed by its button or by Back, with nothing asked of the web and no script of a file run; a link to another note followed from a note that is only read, without the web view being sent anywhere; a selected stroke made twice as thick and given another colour, each one step to undo; what pdf.js fetches being served.
+- **Synchronization:** a test of two libraries through a stand-in (`a_change_that_was_discarded_is_not_sent`): a discarded change costs the two listings and no transfer; a later change goes both ways; a change synchronized before it was discarded is followed by what was put back.
+- Automated: 185 tests of the Rust core and 12 of its round trips through ENEX, 28 of the native shell, 241 of the interface, and the browser check. `cargo audit` and `npm audit` find no vulnerability.
+- **That nothing else about PDFs changed,** in the built Windows application: every PDF of 33 Evernote exports, 140 documents of 1 to 178 pages, 2,593 pages in all, was opened, scrolled to its end and made larger. All were shown, none with a page that could not be drawn or an error in the page.
+- The Windows program and the Android package were built from the released source.
+
+### Not verified
+
+- **On a phone.** None of this was run on a phone, which was not at hand: the previews, the link in a read-only note and the PDF decoders were tried in a phone-sized browser window with touches, and in the Windows application. On Android the decoders may run in their slower form if the web view refuses the fast one; the pages are drawn either way.
+- **Office documents** (Word, Excel, PowerPoint, OpenDocument) have no preview: showing them as they look takes far more than this, and showing only their text was not asked for. Old binary formats, RAR and 7z archives have none either.
+- The Windows installers were built, not run.
+
 ## 1.3.1 — 2026-11-18
 
 A note opened from a search was sometimes stored anew, with today's date, though nothing had been written in it. Also a note opened for reading only. It no longer is.

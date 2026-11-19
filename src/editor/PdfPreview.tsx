@@ -54,7 +54,17 @@ export function PdfPreview({ url, name, onClose }: Props) {
           'pdfjs-dist/build/pdf.worker.min.mjs',
           import.meta.url,
         ).toString();
-        const task = pdfjs.getDocument({ url, withCredentials: false });
+        // What pdf.js fetches when a document asks for it; see scripts/pdf-parts.mjs.
+        const parts = (folder: string) => new URL(`pdfjs/${folder}/`, document.baseURI).toString();
+        const task = pdfjs.getDocument({
+          url,
+          withCredentials: false,
+          cMapUrl: parts('cmaps'),
+          cMapPacked: true,
+          standardFontDataUrl: parts('standard_fonts'),
+          wasmUrl: parts('wasm'),
+          iccUrl: parts('iccs'),
+        });
         destroy = () => void task.destroy();
         const loaded = await task.promise;
         if (cancelled || !scroller.current || !pages.current) return;

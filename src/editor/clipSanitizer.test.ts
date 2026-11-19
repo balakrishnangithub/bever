@@ -164,3 +164,32 @@ describe('kept markup without a clipping mark', () => {
     );
   });
 });
+
+describe('markup that is not a clipping', () => {
+  const shown = (html: string, options: Partial<Parameters<typeof sanitizeClip>[1]> = {}) => {
+    const holder = document.createElement('div');
+    holder.appendChild(sanitizeClip(html, { resource: () => null, allowRemote: false, ...options }).content);
+    return holder.innerHTML;
+  };
+
+  it('shows the pictures a book names by their place in it, where that place is known', () => {
+    const html =
+      '<p><img src="../images/map.png" alt="A map"><img src="missing.png"><img src="javascript:alert(1)"></p>';
+    expect(shown(html)).toBe('<p></p>');
+    expect(
+      shown(html, { image: (source) => (source === '../images/map.png' ? 'blob:picture-1' : null) }),
+    ).toBe('<p><img alt="A map" src="blob:picture-1" referrerpolicy="no-referrer" loading="lazy"></p>');
+  });
+
+  it('keeps a link between chapters as what the reader makes of it, and no other address', () => {
+    const html =
+      '<a href="chapter2.xhtml#top">Next</a> <a href="javascript:alert(1)">No</a> <a href="https://example.com/">Web</a>';
+    expect(shown(html)).toBe(
+      '<a rel="noopener noreferrer">Next</a> <a rel="noopener noreferrer">No</a> <a href="https://example.com/" rel="noopener noreferrer">Web</a>',
+    );
+    const link = (address: string) => (address.startsWith('chapter2') ? '#chapter-1' : null);
+    expect(shown(html, { link })).toBe(
+      '<a href="#chapter-1" rel="noopener noreferrer">Next</a> <a rel="noopener noreferrer">No</a> <a href="https://example.com/" rel="noopener noreferrer">Web</a>',
+    );
+  });
+});

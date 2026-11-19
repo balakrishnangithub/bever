@@ -27,11 +27,14 @@ import { isPng, originalFor, readAnnotations, writeAnnotations, type EmbeddedOri
 import {
   bitmapsOf,
   boundsOf,
+  colorOf,
   drawMarks,
   isWorthKeeping,
   markAt,
   marksOf,
   moved,
+  recolored,
+  resized,
   newDocument,
   parseDocument,
   SHAPES,
@@ -42,6 +45,8 @@ import {
   textMark,
   textOf,
   toolScale,
+  toolSizes,
+  weightOf,
   withMarks,
   withText,
   type Measure,
@@ -217,8 +222,9 @@ export function ImageAnnotator({ bytes, mime, name, onSave, onClose }: Props) {
   }, [bytes, mime]);
 
   const unit = loaded ? toolScale(loaded.document.frame) : 1;
-  const pen = useMemo(() => ({ color, width: weight * 1.6 * unit }), [color, weight, unit]);
-  const textSize = (9 + weight * 3) * unit;
+  const sizes = useMemo(() => toolSizes(weight, unit), [weight, unit]);
+  const pen = useMemo(() => ({ color, width: sizes.pen }), [color, sizes]);
+  const textSize = sizes.text;
   const changed = past.length > 0;
 
   const measure = useCallback<Measure>((text, font) => {
@@ -297,6 +303,30 @@ export function ImageAnnotator({ bytes, mime, name, onSave, onClose }: Props) {
       commit([...marks, textMark(text, writing.at, textSize, color, crypto.randomUUID())]);
     }
   }, [writing, marks, commit, textSize, color]);
+
+  // The mark that is selected takes the size and the colour chosen while
+  // it is: the slider and the colours are for it then, and not only for
+  // what is drawn next. Moving the slider is one step to undo, from where
+  // it was taken up to where it is let go, however far it went between.
+  const sliding = useRef<number | null>(null);
+  useEffect(() => {
+    sliding.current = null;
+  }, [selected, menu, tool]);
+  const chosen = tool === 'select' && selected !== null ? marks[selected] : undefined;
+  const changeWeight = (next: number) => {
+    setWeight(next);
+    if (!chosen || selected === null) return;
+    const larger = resized(chosen, toolSizes(next, unit));
+    const after = marks.map((mark, index) => (index === selected ? larger : mark));
+    if (sliding.current === selected) setMarks(after);
+    else commit(after);
+    sliding.current = selected;
+  };
+  const changeColor = (next: string) => {
+    setColor(next);
+    if (!chosen || selected === null || colorOf(chosen) === null || colorOf(chosen) === next) return;
+    commit(marks.map((mark, index) => (index === selected ? recolored(chosen, next) : mark)));
+  };
 
   const removeSelected = useCallback(() => {
     if (selected === null) return;
@@ -411,11 +441,17 @@ export function ImageAnnotator({ bytes, mime, name, onSave, onClose }: Props) {
     gesture.current = { start: at, points: [at], moving: null, erased: false };
     if (tool === 'stamp') {
       gesture.current = null;
-      commit([...marks, stampMark(stamp, at, 100 * unit, crypto.randomUUID())]);
+      commit([...marks, stampMark(stamp, at, sizes.stamp, crypto.randomUUID())]);
     } else if (tool === 'select') {
       const index = markAt(marks, at, slack(), measure);
-      setSelected(index >= 0 ? index : null);
-      gesture.current.moving = index >= 0 ? (marks[index] ?? null) : null;
+      const mark = index >= 0 ? marks[index] : undefined;
+      setSelected(mark ? index : null);
+      gesture.current.moving = mark ?? null;
+      // The slider and the colour show what the mark has, to be changed from there.
+      if (mark) {
+        setWeight(weightOf(mark, unit));
+        setColor(colorOf(mark) ?? color);
+      }
     } else if (tool === 'eraser') {
       erase(at);
     } else if (tool === 'pen' || tool === 'highlighter') {
@@ -605,7 +641,7 @@ export function ImageAnnotator({ bytes, mime, name, onSave, onClose }: Props) {
             </button>
             <button
               type="button"
-              title="Thickness and text size"
+              title={chosen ? 'Size of the selected mark' : 'Thickness and text size'}
               aria-label="Thickness and text size"
               aria-expanded={menu === 'weight'}
               onClick={() => setMenu(menu === 'weight' ? null : 'weight')}
@@ -692,7 +728,7 @@ export function ImageAnnotator({ bytes, mime, name, onSave, onClose }: Props) {
                   aria-label={value}
                   style={{ background: value }}
                   onClick={() => {
-                    setColor(value);
+                    changeColor(value);
                     setMenu(null);
                   }}
                 />
@@ -707,7 +743,7 @@ export function ImageAnnotator({ bytes, mime, name, onSave, onClose }: Props) {
                 max={10}
                 value={weight}
                 aria-label="Thickness and text size"
-                onChange={(event) => setWeight(Number(event.target.value))}
+                onChange={(event) => changeWeight(Number(event.target.value))}
               />
               <output>{weight}</output>
             </div>

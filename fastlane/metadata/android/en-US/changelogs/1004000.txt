@@ -1,0 +1,1 @@
+Books (EPUB), Markdown, text, tables and archives are read in a preview, as PDFs are. Scanned PDF pages are drawn with their pictures. A selected mark on a picture takes the size and colour chosen for it. A link to another note works in a note that is read-only. A discarded change is no longer sent by the next sync.

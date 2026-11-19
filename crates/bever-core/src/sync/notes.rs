@@ -397,6 +397,13 @@ impl<'a> Session<'a> {
             let mut notes = Vec::with_capacity(batch.len());
             for id in batch {
                 match library.get_note(id) {
+                    // Changed and put back as it was, which a discarded
+                    // edit is: the remote has this very note, and sending
+                    // it again would tell every device of a change that
+                    // is none.
+                    Ok(note) if self.is_as_synced(&note)? => {
+                        mark_note_synced(library, &note.id, note.revision, note.revision)?;
+                    }
                     Ok(note) => notes.push(note),
                     // Deleted since the list was made.
                     Err(BeverError::NotFound(_)) => {}
@@ -658,6 +665,18 @@ impl<'a> Session<'a> {
     }
 
     /// Whether an envelope is the one this library last saw.
+    /// Whether a note is, in everything but its revision, what this library
+    /// last sent or received of it. The marks that are not a note's hash
+    /// (see [`NEEDS_PUSH`], [`DELETED`]) equal no hash.
+    fn is_as_synced(&self, note: &Note) -> Result<bool> {
+        match self.states.get(&note.id) {
+            Some(state) if state.synced_hash.len() == 64 => {
+                Ok(state.synced_hash == content_hash(note)?)
+            }
+            _ => Ok(false),
+        }
+    }
+
     fn is_unchanged(&self, id: &str, file: &RemoteFile) -> bool {
         !file.version.is_empty()
             && self

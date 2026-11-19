@@ -34,6 +34,7 @@ import {
 } from '../editor/ink';
 import { writeAnnotations, writeInk } from '../editor/pngChunks';
 import { drawMarks, newDocument, shapeMark, textMark, withMarks } from '../editor/skitch';
+import { storedZip } from '../editor/zipFile';
 import { registerDemoResource } from './demoResources';
 import { SNIPPET_END, SNIPPET_START } from './snippet';
 
@@ -205,6 +206,139 @@ if (new URLSearchParams(window.location.search).has('demoList')) {
     evernoteGuid: null,
     tags: [],
     resources: [],
+    revision: 1,
+  });
+}
+
+// `?demoFiles` adds a note whose attachments are files to read where they
+// are: a text written in Markdown, a script that says it is no particular
+// file, a table of text, an EPUB book, an archive, and a drawing saved as an
+// unknown file.
+if (new URLSearchParams(window.location.search).has('demoFiles')) {
+  const bytesOf = (text: string) => new TextEncoder().encode(text);
+  const chapter = (body: string) =>
+    `<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title><script>document.title = 'ran'</script></head><body>${body}</body></html>`;
+  const drawing =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80"><rect width="120" height="80" fill="#bfe3d0"/><circle cx="60" cy="40" r="24" fill="#5b9bd5"/></svg>';
+  const book = storedZip([
+    { name: 'mimetype', bytes: bytesOf('application/epub+zip') },
+    {
+      name: 'META-INF/container.xml',
+      bytes: bytesOf(
+        '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
+      ),
+    },
+    {
+      name: 'OEBPS/content.opf',
+      bytes: bytesOf(
+        '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Rivers of the North</dc:title></metadata>' +
+          '<manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="one" href="text/one.xhtml" media-type="application/xhtml+xml"/><item id="two" href="text/two.xhtml" media-type="application/xhtml+xml"/><item id="pond" href="images/pond.svg" media-type="image/svg+xml"/></manifest>' +
+          '<spine><itemref idref="one"/><itemref idref="two"/></spine></package>',
+      ),
+    },
+    {
+      name: 'OEBPS/nav.xhtml',
+      bytes: bytesOf(
+        chapter(
+          '<nav xmlns:epub="http://www.idpf.org/2007/ops" epub:type="toc"><ol><li><a href="text/one.xhtml">The source</a></li><li><a href="text/two.xhtml">The mouth</a></li></ol></nav>',
+        ),
+      ),
+    },
+    {
+      name: 'OEBPS/text/one.xhtml',
+      bytes: bytesOf(
+        chapter(
+          '<h1>The source</h1><p>Every river begins as water that has nowhere else to go.</p>' +
+            '<p><img src="../images/pond.svg" alt="A pond"/><img src="https://example.invalid/tracking.png" alt=""/></p>' +
+            `<p>${'It gathers, and runs downhill. '.repeat(120)}</p>` +
+            '<p>Read on in <a href="two.xhtml">the second chapter</a>.</p>',
+        ),
+      ),
+    },
+    {
+      name: 'OEBPS/text/two.xhtml',
+      bytes: bytesOf(chapter('<h1>The mouth</h1><p>And ends where the sea takes it.</p>')),
+    },
+    { name: 'OEBPS/images/pond.svg', bytes: bytesOf(drawing) },
+  ]);
+  const files: { hash: string; name: string; mime: string; bytes: Uint8Array }[] = [
+    {
+      hash: 'demo-file-markdown',
+      name: 'Field notes.md',
+      mime: 'text/markdown',
+      bytes: bytesOf(
+        '# Field notes\n\nSeen on the **north bank**, _before noon_:\n\n- [x] a lodge\n- [ ] the dam\n\n| Animal | Seen |\n| --- | --- |\n| Beaver | 2 |\n\n```\ncount = 2\n```\n\n<script>document.title = "ran"</script>\n\n![A picture on the web](https://example.invalid/outside.png)\n\nSee [the survey](https://example.com/survey).\n',
+      ),
+    },
+    {
+      hash: 'demo-file-script',
+      name: 'count.py',
+      mime: 'application/octet-stream',
+      bytes: bytesOf(
+        'def count(animals):\n    return len([a for a in animals if a.seen])\n\nprint(count([]))\n',
+      ),
+    },
+    {
+      hash: 'demo-file-table',
+      name: 'sightings.csv',
+      mime: 'text/csv',
+      bytes: bytesOf('Animal,Place,Seen\r\nBeaver,"North bank, upstream",2\r\nOtter,Weir,1\r\n'),
+    },
+    { hash: 'demo-file-book', name: 'Rivers.epub', mime: 'application/epub+zip', bytes: book },
+    {
+      hash: 'demo-file-archive',
+      name: 'Survey.zip',
+      mime: 'application/zip',
+      bytes: storedZip([
+        { name: 'survey/readme.txt', bytes: bytesOf('The survey of the north bank.') },
+        { name: 'survey/data/sightings.csv', bytes: bytesOf('Animal,Seen\nBeaver,2\n') },
+      ]),
+    },
+    {
+      hash: 'demo-file-drawing',
+      name: 'pond.svg',
+      mime: 'application/octet-stream',
+      bytes: bytesOf(drawing),
+    },
+  ];
+  for (const file of files) {
+    // The address answers as an attachment does: an unknown file that is a
+    // drawing is given the type it has.
+    const type = file.name.endsWith('.svg') ? 'image/svg+xml' : file.mime;
+    registerDemoResource(file.hash, URL.createObjectURL(new Blob([file.bytes as BlobPart], { type })));
+  }
+  addDemo({
+    id: 'files-to-read',
+    notebookId: inboxId,
+    title: 'Files to read',
+    contentHtml: files
+      .map((file) => `<div><en-media hash="${file.hash}" type="${file.mime}"></en-media></div>`)
+      .join(''),
+    originalEnml: null,
+    plainText: 'Files to read',
+    createdAt: now - 950000,
+    updatedAt: now - 950000,
+    deletedAt: null,
+    attributes: {},
+    evernoteGuid: null,
+    tags: [],
+    resources: files.map((file, position) => ({
+      id: `${file.hash}-resource`,
+      noteId: 'files-to-read',
+      sha256: file.hash,
+      md5: file.hash,
+      mime: file.mime,
+      fileName: file.name,
+      size: file.bytes.length,
+      width: null,
+      height: null,
+      duration: null,
+      recognitionXml: null,
+      recognitionText: null,
+      attributes: { 'file-name': file.name, attachment: true },
+      alternateSha256: null,
+      position,
+    })),
     revision: 1,
   });
 }

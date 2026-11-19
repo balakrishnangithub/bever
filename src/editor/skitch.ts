@@ -555,6 +555,111 @@ export function moved(mark: SkObject, dx: number, dy: number): SkObject {
   return next;
 }
 
+/** The sizes the tools draw with at one setting of the slider, in pixels of the picture. */
+export interface ToolSizes {
+  /** A line's width; a highlighter's is twice that. */
+  pen: number;
+  /** The height of a text's letters. */
+  text: number;
+  /** The side of a stamp's frame. */
+  stamp: number;
+}
+
+/** What the slider's `weight` (1 to 10) means on a picture whose tools draw at `unit`. */
+export function toolSizes(weight: number, unit: number): ToolSizes {
+  return { pen: weight * 1.6 * unit, text: (9 + weight * 3) * unit, stamp: (40 + weight * 12) * unit };
+}
+
+const isHighlighter = (mark: SkObject) => !extension(mark) && (color(mark.strokeColor)?.alpha ?? 1) < 1;
+
+/**
+ * The setting of the slider at which the tools would draw `mark` as large
+ * as it is, as near as the slider has it: the other way of {@link resized}.
+ */
+export function weightOf(mark: SkObject, unit: number): number {
+  let weight: number;
+  if (mark.type === 'Text') weight = (textFont(mark).size / unit - 9) / 3;
+  else if (mark.type === 'Stamp') weight = (frame(mark.frame).width / unit - 40) / 12;
+  else {
+    const shape = extension(mark);
+    const width =
+      shape?.type === 'Arrow' ? number(shape.toolArrowSize, number(mark.lineWidth)) : number(mark.lineWidth);
+    weight = (isHighlighter(mark) ? width / 2 : width) / (1.6 * unit);
+  }
+  return Math.max(1, Math.min(10, Math.round(weight)));
+}
+
+/**
+ * `mark` as large as the tools would draw it now: a line as thick, a text's
+ * letters as high, a stamp as wide. Where it is, what it says, its colour
+ * and the shape it runs along stay as they are: a text keeps its corner, a
+ * stamp its middle, an arrow its two ends.
+ */
+export function resized(mark: SkObject, sizes: ToolSizes): SkObject {
+  if (mark.type === 'Text') {
+    return {
+      ...mark,
+      font: { ...(isRecord(mark.font) ? mark.font : {}), size: round(sizes.text) },
+      // The edge of the letters grows with them, where there is one.
+      ...(number(mark.lineWidth) > 0 ? { lineWidth: round(sizes.text / 3) } : {}),
+    };
+  }
+  if (mark.type === 'Stamp') {
+    const box = frame(mark.frame);
+    return {
+      ...mark,
+      frame: {
+        ...(isRecord(mark.frame) ? mark.frame : {}),
+        x: round(box.x + box.width / 2 - sizes.stamp / 2),
+        y: round(box.y + box.height / 2 - sizes.stamp / 2),
+        width: round(sizes.stamp),
+        height: round(sizes.stamp),
+      },
+    };
+  }
+  const shape = extension(mark);
+  const arrow = arrowEnds(mark);
+  if (shape && arrow) {
+    // An arrow's thickness is the outline of its head and shaft.
+    const drawn = shapeMark('arrow', arrow.start, arrow.end, { color: '#000000', width: sizes.pen }, '');
+    return { ...mark, path: drawn.path, extension: { ...shape, toolArrowSize: round(sizes.pen) } };
+  }
+  return { ...mark, lineWidth: round(isHighlighter(mark) ? sizes.pen * 2 : sizes.pen) };
+}
+
+const hex = (value: SkColor) =>
+  `#${[value.red, value.green, value.blue].map((part) => Math.round(part).toString(16).padStart(2, '0')).join('')}`;
+
+/** The colour a mark is drawn in, as `#rrggbb`; a stamp has its own and gives none. */
+export function colorOf(mark: SkObject): string | null {
+  if (mark.type === 'Stamp') return null;
+  const shown = mark.type === 'Text' || arrowEnds(mark) ? color(mark.fillColor) : color(mark.strokeColor);
+  return shown ? hex(shown) : null;
+}
+
+/**
+ * `mark` in another colour, as see-through as it was. A text's edge stays
+ * one that shows against its letters; a stamp, whose colour says what it
+ * is, is returned as it is.
+ */
+export function recolored(mark: SkObject, colorHex: string): SkObject {
+  if (mark.type === 'Stamp') return mark;
+  if (mark.type === 'Text') {
+    const fresh = textMark('', { x: 0, y: 0 }, 1, colorHex, '');
+    return {
+      ...mark,
+      fillColor: fresh.fillColor,
+      ...(color(mark.strokeColor) ? { strokeColor: fresh.strokeColor } : {}),
+    };
+  }
+  const next: SkObject = { ...mark };
+  for (const key of ['strokeColor', 'fillColor'] as const) {
+    const before = color(mark[key]);
+    if (before) next[key] = rgb(colorHex, before.alpha);
+  }
+  return next;
+}
+
 /** `mark` with another text; other marks are returned as they are. */
 export function withText(mark: SkObject, text: string): SkObject {
   return mark.type === 'Text' ? { ...mark, text } : mark;

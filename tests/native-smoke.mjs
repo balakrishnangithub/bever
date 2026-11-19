@@ -400,6 +400,65 @@ try {
   expect(range.unknownStatus).toBe(404);
   check('the attachment protocol serves byte ranges and only known attachments');
 
+  // A file that can be read is read where it is: a text written in Markdown
+  // is fetched from the attachment store and shown as it reads, with what
+  // it would run left out. A drawing stored as a file of no particular kind
+  // is served as the picture it is, and shown.
+  await page.locator('.note-prose').evaluate((element) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(
+      new File(
+        ['# Smoke heading\n\nRead **where it is**.\n\n<script>document.title = "ran"</script>\n'],
+        'smoke-notes.md',
+        { type: 'text/markdown' },
+      ),
+    );
+    transfer.items.add(
+      new File(
+        [
+          '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="12"><rect width="24" height="12"/></svg>',
+        ],
+        'smoke-drawing.svg',
+        { type: 'application/octet-stream' },
+      ),
+    );
+    element.dispatchEvent(
+      new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }),
+    );
+  });
+  const readable = page.locator('.attachment-preview-button');
+  await expect(readable).toHaveText(['Preview'], { timeout: 15000 });
+  await expect(pasted).toHaveCount(2, { timeout: 15000 });
+  await expect
+    .poll(() => pasted.nth(1).evaluate((element) => element.complete && element.naturalWidth), {
+      timeout: 15000,
+    })
+    .toBe(24);
+  const drawingType = await page.evaluate(
+    async (url) => (await fetch(url)).headers.get('content-type'),
+    await pasted.nth(1).getAttribute('src'),
+  );
+  expect(drawingType).toBe('image/svg+xml');
+  await readable.click();
+  const reading = page.getByRole('dialog', { name: 'Preview smoke-notes.md' });
+  await expect(reading.locator('.preview-scroll[aria-busy="false"]')).toBeVisible({ timeout: 15000 });
+  const inPreview = (selector) =>
+    page.evaluate(
+      (wanted) =>
+        [...(document.querySelector('.preview-page')?.shadowRoot?.querySelectorAll(wanted) ?? [])].map(
+          (found) => found.textContent,
+        ),
+      selector,
+    );
+  expect(await inPreview('h1')).toEqual(['Smoke heading']);
+  expect(await inPreview('strong')).toEqual(['where it is']);
+  expect(await inPreview('script')).toEqual([]);
+  expect(await page.title()).not.toBe('ran');
+  await reading.getByRole('button', { name: 'Close preview' }).click();
+  await expect(reading).toHaveCount(0);
+  await expect(page.getByText('Saved locally', { exact: true })).toBeVisible({ timeout: 15000 });
+  check('a Markdown attachment is read in a preview, and a drawing stored as an unknown file is shown');
+
   // A small picture of an attachment, for the list of notes, and none of
   // anything that is not an attachment.
   const small = await page.evaluate(async (url) => {
@@ -419,7 +478,7 @@ try {
   // A picture this small does not stand for its note until it is chosen to.
   const ownCard = page.locator('.note-card.selected');
   await expect(ownCard.locator('.note-thumbnail')).toHaveCount(0);
-  await pasted.click({ button: 'right' });
+  await pasted.first().click({ button: 'right' });
   await page
     .getByRole('menu', { name: /^Actions for/ })
     .getByRole('menuitem', { name: 'Use as note thumbnail' })

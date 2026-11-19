@@ -98,6 +98,16 @@ export function RichEditor({
       immediatelyRender: false,
       editorProps: {
         attributes: { class: 'note-prose', 'aria-label': 'Note content', spellcheck: 'true' },
+        handleDOMEvents: {
+          // A link in a note is followed by Bever, never by the web view:
+          // in a note that is only read, a link is an ordinary link to the
+          // browser, which would go to its address by itself, and an
+          // address such as bever://note/… is not a page.
+          click: (_view, event) => {
+            if ((event.target as HTMLElement | null)?.closest?.('a[href]')) event.preventDefault();
+            return false;
+          },
+        },
         handleClick: (view, _pos, event) => {
           const anchor = (event.target as HTMLElement).closest('a');
           const href = anchor?.getAttribute('href');
@@ -116,7 +126,12 @@ export function RichEditor({
             });
             return false;
           }
-          followLink(href, anchor.textContent ?? '');
+          // Once the click is over: following a link takes the note, and
+          // the link with it, off the page, and a click that then lands on
+          // a link no longer in any page is the browser's alone to answer,
+          // which it does by going to the address.
+          const text = anchor.textContent ?? '';
+          window.setTimeout(() => followLink(href, text), 0);
           return true;
         },
         handlePaste: (_view, event) => {

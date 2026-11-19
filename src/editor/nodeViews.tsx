@@ -19,6 +19,7 @@ import { ContextMenu, type MenuItem } from '../components/ContextMenu';
 import { api, isNative, resourceUrl } from '../lib/api';
 import { formatBytes } from '../lib/syncProgress';
 import { message, useLibraryStore } from '../store/useLibraryStore';
+import { isPicture, PREVIEW_LABELS, previewKind } from './attachmentKind';
 import { ImageAttachment } from './ImageAttachment';
 import { chosenThumbnail } from '../types';
 import { readImageLayout, withImageLayout } from './imageLayout';
@@ -42,6 +43,7 @@ export interface AnnotationRequest {
 }
 
 const PdfPreview = lazy(() => import('./PdfPreview').then((module) => ({ default: module.PdfPreview })));
+const FilePreview = lazy(() => import('./FilePreview').then((module) => ({ default: module.FilePreview })));
 
 export function AttachmentView({ node, editor, selected, getPos, decorations }: NodeViewProps) {
   const selectedNote = useLibraryStore((state) => state.selectedNote);
@@ -57,7 +59,11 @@ export function AttachmentView({ node, editor, selected, getPos, decorations }: 
   const name = resource?.fileName || String(node.attrs.title ?? '') || 'Attachment';
   const width = node.attrs.width ? Number(node.attrs.width) : undefined;
   const height = node.attrs.height ? Number(node.attrs.height) : undefined;
-  const isPdf = mime.toLowerCase() === 'application/pdf' || name.toLowerCase().endsWith('.pdf');
+  // What it can be read in, where it is: a PDF, a book, a text, a table, an archive's list.
+  const readable = previewKind(mime, name);
+  const isPdf = readable === 'pdf';
+  // A picture by what it says it is, or by its name when it says nothing.
+  const pictured = isPicture(mime, name);
 
   const run = (action: (resourceId: string) => Promise<unknown>) => {
     if (!resource) return;
@@ -90,7 +96,7 @@ export function AttachmentView({ node, editor, selected, getPos, decorations }: 
       }),
     );
   const items: MenuItem[] = [
-    ...(isPdf ? [{ label: 'Preview', icon: <Eye />, onSelect: () => setPreview(true) }] : []),
+    ...(readable ? [{ label: 'Preview', icon: <Eye />, onSelect: () => setPreview(true) }] : []),
     ...(mime.startsWith('image/') && editor.isEditable && resource
       ? [
           { label: sketch ? 'Edit sketch…' : 'Annotate…', icon: <PenLine />, onSelect: annotate },
@@ -118,7 +124,7 @@ export function AttachmentView({ node, editor, selected, getPos, decorations }: 
   // A picture the note names and the library has no file for: the note was
   // imported without it, because it was not there to be had. It is said to
   // be missing, where a broken picture would say nothing.
-  const lost = mime.startsWith('image/') && !resource && (failed || !url);
+  const lost = pictured && !resource && (failed || !url);
   let content = (
     <span className="attachment attachment-file">
       {lost ? <ImageOff size={18} /> : isPdf ? <File size={18} /> : <Paperclip size={18} />}
@@ -132,7 +138,7 @@ export function AttachmentView({ node, editor, selected, getPos, decorations }: 
       </small>
     </span>
   );
-  const picture = mime.startsWith('image/') && !lost;
+  const picture = pictured && !lost;
   const layout = picture ? readImageLayout(node.attrs) : null;
   if (picture) {
     content = (
@@ -198,9 +204,9 @@ export function AttachmentView({ node, editor, selected, getPos, decorations }: 
           <MoreHorizontal />
         </button>
       )}
-      {isPdf && (
+      {readable && (
         <button className="attachment-preview-button" onClick={() => setPreview(true)}>
-          <Eye /> Preview PDF
+          <Eye /> {PREVIEW_LABELS[readable]}
         </button>
       )}
       {menu && (
@@ -217,8 +223,12 @@ export function AttachmentView({ node, editor, selected, getPos, decorations }: 
         </span>
       )}
       {preview && (
-        <Suspense fallback={<span className="attachment-error">Loading PDF preview…</span>}>
-          <PdfPreview url={url} name={name} onClose={() => setPreview(false)} />
+        <Suspense fallback={<span className="attachment-error">Loading preview…</span>}>
+          {readable && readable !== 'pdf' ? (
+            <FilePreview url={url} name={name} kind={readable} onClose={() => setPreview(false)} />
+          ) : (
+            <PdfPreview url={url} name={name} onClose={() => setPreview(false)} />
+          )}
         </Suspense>
       )}
     </NodeViewWrapper>

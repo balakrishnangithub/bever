@@ -3,6 +3,8 @@
 tools/rustup-init.exe
 node_modules/
 dist/
+# Copied from pdfjs-dist when the interface is built; see scripts/pdf-parts.mjs
+public/pdfjs/
 target/
 src-tauri/target/
 # Regenerate machine-specific Android projects with npm run android:init
