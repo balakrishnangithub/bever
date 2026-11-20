@@ -12,6 +12,7 @@
 //! A run can be stopped at any moment ([`Cancel`]), and it keeps a record of
 //! itself in the library ([`SyncRun`]), so that what happened to a run that
 //! nobody watched can be read afterwards.
+pub mod folder;
 mod history;
 mod metadata;
 mod notes;
@@ -98,12 +99,7 @@ pub(crate) struct Layout {
 
 impl Layout {
     fn new(root: &str) -> Result<Self> {
-        let valid = root.starts_with('/')
-            && root.len() > 1
-            && !root.ends_with('/')
-            && !root.contains("//")
-            && !root.split('/').any(|part| part == "." || part == "..");
-        if !valid {
+        if !folder::is_folder_path(root) {
             return Err(BeverError::Invalid(format!(
                 "invalid remote folder: {root}"
             )));
@@ -249,8 +245,12 @@ fn run(
     progress.check()?;
     progress.emit("preparing", "Connecting and preparing sync folders", 0, 0);
     // The folders are there on every run but the first, and the listing that
-    // a run needs anyway says so. Only a missing one is made.
-    let root = match remote.list(&layout.root)? {
+    // a run needs anyway says so. Only a missing one is made. The same
+    // listing says which library the folder holds, and a run goes on only
+    // when that is this one.
+    let listed = remote.list(&layout.root)?;
+    let unmarked = folder::recognise(library, remote, layout, listed.as_ref())?;
+    let root = match listed {
         Some(listing) => listing,
         None => {
             remote.ensure_folder(&layout.root)?;
@@ -277,6 +277,10 @@ fn run(
     session.push(report, progress)?;
     progress.check()?;
     metadata::push(library, remote, layout, remote_metadata, progress)?;
+    if unmarked {
+        // Last, when the folder holds what the library has.
+        folder::mark(library, remote, layout)?;
+    }
 
     progress.emit("finalizing", "Finishing synchronization", 0, 0);
     library.optimize()?;

@@ -71,6 +71,7 @@ Bever is an independent project. It is not affiliated with, endorsed by, or spon
 **Synchronization and privacy**
 
 - Optional pCloud synchronization with revisions, conflict copies, and deletions that reach your other devices.
+- A library is kept in a pCloud folder you choose, so one pCloud account can hold several libraries that never mix: yours and another person's, each in its own folder. A device either starts a new library or joins one that is there.
 - Optional on-device text recognition for PNG, JPEG, and WebP images, done in the background.
 - No account, telemetry, advertising, AI service, or server-side application compute.
 
@@ -210,7 +211,12 @@ Text that Evernote already recognised is imported and searchable, with the place
 1. Create or open a pCloud OAuth application. The bundled public client identifier is for the application details supplied during development; no client secret is included or needed for implicit token flow.
 2. Add the redirect URIs `http://127.0.0.1:53682/`, for Windows and other desktops, and `bever://oauth/pcloud`, for Android, then **allow implicit grant (token flow)** and save the pCloud application settings. The application registered for the bundled identifier has both.
 3. Open **Settings & sync → Connect with browser**, or use the manual access-token option with the correct Global/Europe API region. A sign-in you have abandoned can be cancelled.
-4. Choose **Sync now**. Bever creates `/Bever/items`, `/Bever/blobs`, and `/Bever/metadata.json` in your pCloud account. The current operation, elapsed and network time, request count, and transferred bytes are visible while it runs.
+4. Choose where the library is kept. Connecting asks for it, and **Choose folder…** asks again later:
+   - **Start a new library** makes a folder for this library where you say, named `Bever` unless you name it otherwise. Take this for the first device of a library, and for a library that is to stay apart from one already in the account, such as another person's.
+   - **Join an existing library** is for another device of a library that is in pCloud already: open its folder, which says that it holds a library. A library found at `/Bever` is offered first.
+5. Choose **Sync now**. Bever creates `items`, `blobs`, `metadata.json` and `library.json` in that folder. The current operation, elapsed and network time, request count, and transferred bytes are visible while it runs.
+
+Two people who share one pCloud account each start a library of their own, in two folders (`/Bever` and `/Bever 2`, or any names and places they like), and each connects their other devices to their own folder. Nothing of one library is ever read or written by the devices of the other. **Change…**, beside the folder's name in Settings, moves a device to another folder; a library whose folder was moved or renamed in pCloud is found again by choosing the folder as an existing library, and goes on from where it was. See [docs/sync.md](docs/sync.md#where-a-library-is-kept).
 
 Tokens are kept in the OS credential vault, not the notes database; Android uses Keystore-backed encrypted preferences. The token is sent to pCloud in a request header, never in an address. The remote copy is **not end-to-end encrypted**; pCloud can access the uploaded content.
 
@@ -252,7 +258,7 @@ Automated tests cover the following. None of them needs a network connection or 
 Before a release these are also checked on Windows:
 
 - Private exports (of 2 to 705 notes and up to 922 MiB) are imported, exported, and imported again; note text, metadata, tags, and attachment hashes must match. The files are not added to source control.
-- Temporary libraries are synchronized through a real pCloud account in a folder made for the test, including a run that is cut off halfway and joined by a second device.
+- Temporary libraries are synchronized through a real pCloud account in a folder made for the test, including a run that is cut off halfway and joined by a second device, and two libraries kept side by side in folders of their own.
 - The built Windows application is driven through its own window, with an empty library and with an imported one.
 
 The Android build is compiled and packaged for each release. Its file pickers, opening of attachments, and keyboard handling have not been run on a device as part of these checks.

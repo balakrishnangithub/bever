@@ -162,6 +162,38 @@ pub(crate) mod memory {
             self.files.lock().unwrap().get(path).cloned()
         }
 
+        /// Removes a file, as somebody with the account may.
+        pub(crate) fn remove(&self, path: &str) {
+            self.files.lock().unwrap().remove(path);
+        }
+
+        /// Removes a folder and all that is in it.
+        pub(crate) fn remove_folder(&self, folder: &str) {
+            let inside = format!("{folder}/");
+            let within = |path: &String| path == folder || path.starts_with(&inside);
+            self.files.lock().unwrap().retain(|path, _| !within(path));
+            self.folders.lock().unwrap().retain(|path| !within(path));
+        }
+
+        /// Moves a folder, with all that is in it, to another name.
+        pub(crate) fn rename(&self, from: &str, to: &str) {
+            let inside = format!("{from}/");
+            let moved = |path: &str| {
+                (path == from || path.starts_with(&inside))
+                    .then(|| format!("{to}{}", &path[from.len()..]))
+            };
+            let mut files = self.files.lock().unwrap();
+            *files = std::mem::take(&mut *files)
+                .into_iter()
+                .map(|(path, bytes)| (moved(&path).unwrap_or(path), bytes))
+                .collect();
+            let mut folders = self.folders.lock().unwrap();
+            *folders = std::mem::take(&mut *folders)
+                .into_iter()
+                .map(|path| moved(&path).unwrap_or(path))
+                .collect();
+        }
+
         /// Requests made so far.
         pub(crate) fn requests(&self) -> u64 {
             self.requests.load(Ordering::SeqCst)
@@ -215,10 +247,17 @@ pub(crate) mod memory {
         fn list(&self, folder: &str) -> Result<Option<Listing>> {
             self.requests.fetch_add(1, Ordering::SeqCst);
             let folders = self.folders.lock().unwrap();
-            if !folders.contains(folder) {
+            // The top is always there, and is the one folder whose name
+            // ends as the names inside it begin.
+            let top = folder == "/";
+            if !top && !folders.contains(folder) {
                 return Ok(None);
             }
-            let prefix = format!("{folder}/");
+            let prefix = if top {
+                "/".to_owned()
+            } else {
+                format!("{folder}/")
+            };
             let directly_inside = |path: &str| {
                 path.strip_prefix(&prefix)
                     .filter(|name| !name.contains('/'))

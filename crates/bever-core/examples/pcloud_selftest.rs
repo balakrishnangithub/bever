@@ -24,7 +24,10 @@ use bever_core::{
     enex::import_enex,
     models::{Note, SaveNote, SyncReport},
     pcloud::{PCloudClient, PCloudCredentials},
-    sync::{sync_with_remote, Listing, RemoteFile, RemoteStore, SyncOptions, TransferMetrics},
+    sync::{
+        folder::{choose, look, Choice},
+        sync_with_remote, Listing, RemoteFile, RemoteStore, SyncOptions, TransferMetrics,
+    },
     BeverError, Library, Result,
 };
 use serde_json::json;
@@ -317,9 +320,9 @@ fn synthetic(
 
     // What a run costs: the two listings, and a transfer for what changed.
     check(
-        pushed.remote_requests == 10,
+        pushed.remote_requests == 11,
         &format!(
-            "the first upload made 10 requests: 4 to find and make the folders, 3 attachments, the 12 notes in 1, and 2 for the notebook list ({})",
+            "the first upload made 11 requests: 4 to find and make the folders, 3 attachments, the 12 notes in 1, 2 for the notebook list, and 1 to name the library ({})",
             pushed.remote_requests
         ),
         failures,
@@ -588,6 +591,121 @@ fn real_volume(
     Ok(())
 }
 
+/// Two libraries in one account, each in a folder of its own inside this
+/// run's folder: neither sees the other's notes, a folder that is taken is
+/// not taken twice, and one that is removed is missed and not made again.
+fn two_libraries(
+    credentials: &PCloudCredentials,
+    base: &str,
+    failures: &mut Vec<String>,
+) -> Result<()> {
+    println!("Two libraries side by side:");
+    let client = PCloudClient::new(credentials.clone())?;
+    client.ensure_folder(base)?;
+    let (his, hers, his_phone) = (Device::new()?, Device::new()?, Device::new()?);
+    for (device, whose) in [(&his, "His"), (&hers, "Her")] {
+        for number in 1..=2 {
+            let id = device.library.create_note(None)?.id;
+            device.edit(&id, &format!("{whose} note {number}"), "<p>Body</p>", &[])?;
+            device.library.add_resource(
+                &id,
+                &mut &noise(40_000, number + whose.len() as u64)[..],
+                "file.bin",
+                None,
+            )?;
+        }
+    }
+    let his_folder = format!("{base}/Bever");
+    let her_folder = format!("{base}/Her notes");
+    choose(&his.library, &client, &his_folder, Choice::New)?;
+    check(
+        choose(&hers.library, &client, &his_folder, Choice::New)
+            .is_err_and(|error| error.to_string().contains("already holds a library")),
+        "a folder that holds a library is not taken for a second one",
+        failures,
+    );
+    choose(&hers.library, &client, &her_folder, Choice::New)?;
+    let shown = look(&hers.library, &client, base)?;
+    check(
+        shown.folders == ["Bever", "Her notes"] && !shown.holds_library,
+        "the folders are listed for choosing, in the order names are read in",
+        failures,
+    );
+    let sync = |device: &Device, label: &str| -> Result<SyncReport> {
+        let folder = device.library.sync_folder()?.expect("a folder was chosen");
+        device.sync(credentials, &folder, label)
+    };
+    sync(&his, "his library, first run")?;
+    sync(&hers, "her library, first run")?;
+    let (his_idle, her_idle) = (sync(&his, "his, again")?, sync(&hers, "hers, again")?);
+    check(
+        his_idle.pulled + her_idle.pulled + his_idle.pushed + her_idle.pushed == 0
+            && his_idle.remote_requests == 2
+            && her_idle.remote_requests == 2,
+        "neither library receives anything of the other, and an idle run still makes two requests",
+        failures,
+    );
+    let notes_in = |folder: &str| -> Result<usize> {
+        Ok(client
+            .list(&format!("{folder}/items"))?
+            .map_or(0, |listing| listing.files.len()))
+    };
+    check(
+        notes_in(&his_folder)? == 2 && notes_in(&her_folder)? == 2,
+        "each folder holds the notes of its own library",
+        failures,
+    );
+
+    let found = look(&his_phone.library, &client, &his_folder)?;
+    check(
+        found.holds_library && !found.ours && found.folders.is_empty(),
+        "the folder says that it holds a library, to a device that does not know it",
+        failures,
+    );
+    choose(&his_phone.library, &client, &his_folder, Choice::Existing)?;
+    let joined = sync(&his_phone, "another device joins his library")?;
+    let titles = his_phone
+        .library
+        .all_notes()?
+        .into_iter()
+        .map(|note| note.title)
+        .collect::<Vec<_>>();
+    check(
+        joined.pulled == 2 && titles.iter().all(|title| title.starts_with("His note")),
+        "a device that joins a library receives that library's notes and no others",
+        failures,
+    );
+    check(
+        look(&his_phone.library, &client, &his_folder)?.ours
+            && !look(&hers.library, &client, &his_folder)?.ours,
+        "a folder is known for the one a device synchronizes with, and for another",
+        failures,
+    );
+
+    // Her folder is removed, as somebody with the account may.
+    assert!(her_folder.starts_with(ROOT_PREFIX));
+    client.delete_folder_recursive(&her_folder)?;
+    check(
+        sync(&hers, "her library, its folder removed")
+            .is_err_and(|error| error.to_string().contains("is not there any more")),
+        "a folder that was removed is missed in plain words",
+        failures,
+    );
+    check(
+        client.list(&her_folder)?.is_none() && hers.library.all_notes()?.len() == 2,
+        "and is not made again; the notes on the device are as they were",
+        failures,
+    );
+    choose(&hers.library, &client, &her_folder, Choice::New)?;
+    let again = sync(&hers, "her library, started anew")?;
+    check(
+        again.pushed == 2 && notes_in(&her_folder)? == 2,
+        "started anew, the library is uploaded whole",
+        failures,
+    );
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
     let export = arguments
@@ -609,6 +727,7 @@ fn main() -> Result<()> {
     let mut failures = Vec::new();
     let outcome = synthetic(&credentials, &root, &mut failures)
         .and_then(|()| joined_midway(&credentials, &format!("{root}/midway"), &mut failures))
+        .and_then(|()| two_libraries(&credentials, &format!("{root}/shared"), &mut failures))
         .and_then(|()| rejected_token(&credentials, &mut failures))
         .and_then(|()| match &export {
             Some(export) => real_volume(

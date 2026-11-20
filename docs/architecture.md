@@ -39,7 +39,7 @@ The browser adapter in `src/lib/browserApi.ts` exists only to exercise the inter
 - `tasks.rs`: Evernote's tasks, from an export or from Evernote's files, as checklists in their note.
 - `ocr.rs`: reads queued images with the bundled models.
 - `pcloud.rs`: client for pCloud's HTTPS API with host allowlisting, retries, and streamed transfers.
-- `sync/`: the engine and what stops it (`mod.rs`), notes (`notes.rs`), metadata (`metadata.rs`), the storage trait and its in-memory test implementation (`remote.rs`), bounded parallel transfers (`transfer.rs`), the record a run leaves of itself (`history.rs`), and the way to a storage service over HTTP (`transport.rs`).
+- `sync/`: the engine and what stops it (`mod.rs`), notes (`notes.rs`), metadata (`metadata.rs`), the storage trait and its in-memory test implementation (`remote.rs`), bounded parallel transfers (`transfer.rs`), the record a run leaves of itself (`history.rs`), the folder a library is kept in and how it is told from another library (`folder.rs`), and the way to a storage service over HTTP (`transport.rs`).
 
 ## Shell modules
 
@@ -50,6 +50,7 @@ The browser adapter in `src/lib/browserApi.ts` exists only to exercise the inter
 - `pcloud_auth.rs`, `android_oauth.rs`, `credentials.rs`: sign-in and token storage.
 - `ocr_worker.rs`: the background text-recognition worker.
 - `sync_controller.rs`, `sync_platform.rs`, `awake.rs`: the single synchronization worker, what stops it, its platform lifetime, and the request to Windows to stay awake while it runs.
+- `sync_folder.rs`: looking at the folders of the storage and choosing the one the library is kept in.
 
 ## Trust boundary
 

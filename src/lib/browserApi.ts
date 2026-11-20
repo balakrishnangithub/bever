@@ -15,6 +15,7 @@ import type {
   SavedNote,
   Settings,
   ShortcutTarget,
+  SyncFolderView,
   SyncRun,
   SyncStatus,
   ThumbnailChoice,
@@ -90,6 +91,7 @@ const disconnected: PCloudStatus = {
   hostname: 'api.pcloud.com',
   lastSyncAt: null,
   authorizationPending: false,
+  folder: null,
 };
 
 function addDemo(note: Note) {
@@ -1205,6 +1207,77 @@ const syncRuns: SyncRun[] = demoSync
     ]
   : [];
 
+// The folders of a storage that is not there, for choosing where the
+// library is kept: one library at the place libraries are kept by default,
+// another person's further in, and folders that hold other things. With
+// `?demoSync=unsettled` no folder is chosen yet, as on a device that was
+// just connected.
+let demoSyncFolder: string | null =
+  new URLSearchParams(window.location.search).get('demoSync') === 'unsettled' ? null : '/Bever';
+const demoFolders = new Map<string, { folders: string[]; files: boolean; library: boolean }>([
+  ['/', { folders: ['Photos', 'Family', 'Documents', 'Bever'], files: true, library: false }],
+  ['/Bever', { folders: ['items', 'blobs'], files: true, library: true }],
+  ['/Documents', { folders: ['Taxes', 'Work'], files: true, library: false }],
+  ['/Documents/Taxes', { folders: [], files: true, library: false }],
+  ['/Documents/Work', { folders: [], files: false, library: false }],
+  ['/Family', { folders: ['Recipes', 'Her notes'], files: false, library: false }],
+  ['/Family/Her notes', { folders: ['items', 'blobs'], files: true, library: true }],
+  ['/Family/Recipes', { folders: [], files: false, library: false }],
+  ['/Photos', { folders: ['2026', '2025'], files: false, library: false }],
+  ['/Photos/2025', { folders: [], files: true, library: false }],
+  ['/Photos/2026', { folders: [], files: true, library: false }],
+]);
+
+function lookAtDemoFolder(path: string): SyncFolderView {
+  const folder = demoFolders.get(path);
+  if (!folder) throw new Error(`There is no folder ${path}`);
+  return {
+    path,
+    folders: folder.library
+      ? []
+      : [...folder.folders].sort((left, right) => left.localeCompare(right, undefined, { numeric: true })),
+    empty: !folder.files && folder.folders.length === 0,
+    holdsLibrary: folder.library,
+    ours: folder.library && path === demoSyncFolder,
+  };
+}
+
+function demoPcloudStatus(): PCloudStatus {
+  return demoSync
+    ? {
+        ...disconnected,
+        connected: true,
+        email: 'someone@example.com',
+        // The runs that are told of were runs with the folder there was.
+        lastSyncAt: demoSyncFolder === '/Bever' ? (syncRuns[0]?.endedAt ?? null) : null,
+        folder: demoSyncFolder,
+      }
+    : { ...disconnected };
+}
+
+function chooseDemoFolder(path: string, existing: boolean): PCloudStatus {
+  const there = demoFolders.get(path);
+  if (existing) {
+    if (!there?.library) throw new Error(`${path} does not hold a library`);
+  } else {
+    if (there?.library)
+      throw new Error(
+        `${path} already holds a library. Give the new one another name, or choose that folder as an existing library.`,
+      );
+    if (there && (there.files || there.folders.length > 0))
+      throw new Error(
+        `${path} has other things in it. A library needs a folder of its own: give the new one another name.`,
+      );
+    const cut = path.lastIndexOf('/');
+    const above = demoFolders.get(cut === 0 ? '/' : path.slice(0, cut));
+    if (!above) throw new Error(`There is no folder ${path.slice(0, cut)}`);
+    if (!there) above.folders.push(path.slice(cut + 1));
+    demoFolders.set(path, { folders: [], files: true, library: true });
+  }
+  demoSyncFolder = path;
+  return demoPcloudStatus();
+}
+
 function publishSync() {
   syncState = { ...syncState, revision: syncState.revision + 1 };
   window.dispatchEvent(new CustomEvent('bever:sync-status', { detail: structuredClone(syncState) }));
@@ -1766,16 +1839,9 @@ export const browserApi: BeverApi = {
   syncStatus: demo((): SyncStatus => structuredClone(syncState)),
   stopSync: demo(stopDemoSync),
   syncHistory: demo((): SyncRun[] => structuredClone(syncRuns)),
-  pcloudStatus: demo((): PCloudStatus =>
-    demoSync
-      ? {
-          ...disconnected,
-          connected: true,
-          email: 'someone@example.com',
-          lastSyncAt: syncRuns[0]?.endedAt ?? null,
-        }
-      : { ...disconnected },
-  ),
+  lookAtSyncFolder: demo(lookAtDemoFolder),
+  chooseSyncFolder: demo(chooseDemoFolder),
+  pcloudStatus: demo(demoPcloudStatus),
   connectPcloud: demo((): PCloudStatus => nativeOnly('pCloud connection')()),
   cancelPcloudConnect: demo(() => ({ ...disconnected })),
   connectPcloudToken: demo((): PCloudStatus => nativeOnly('pCloud connection')()),

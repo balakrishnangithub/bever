@@ -1,0 +1,1 @@
+A library is kept in a pCloud folder you choose, so one pCloud account can hold several libraries that never mix. After connecting, start a new library in a folder of its own or join one that is there. A library synchronized before stays in /Bever and is asked nothing. A folder that was moved or removed is said to be missing instead of being made again empty.

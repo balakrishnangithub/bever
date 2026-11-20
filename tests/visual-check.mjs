@@ -2454,7 +2454,125 @@ try {
   await expect(stop).toHaveCount(0);
   await expect(runs.locator('li').first()).toContainText('Completed in');
   await expect(runs.locator('li').first()).toContainText('↑ 40 notes, 0 attachments');
+  // The folder the library is kept in is said where the connection is.
+  await expect(syncSettings.locator('.sync-folder-line')).toContainText('Kept in the pCloud folder /Bever');
   await syncing.close();
+
+  // Where the library is kept (?demoSync=unsettled): a device that was just
+  // connected has no folder, cannot synchronize, and is shown the library
+  // that is there; a new library is started beside it, in a folder of its
+  // own, and the folder can be changed afterwards.
+  for (const phone of [false, true]) {
+    const context = await browser.newContext({
+      viewport: phone ? { width: 390, height: 844 } : { width: 1440, height: 920 },
+      hasTouch: phone,
+      isMobile: phone,
+    });
+    const choosing = await context.newPage();
+    choosing.on('pageerror', (error) => errors.push(error.message));
+    choosing.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    const press = (locator) => (phone ? locator.tap() : locator.click());
+    await choosing.goto('http://127.0.0.1:7100/?demoSync=unsettled', { waitUntil: 'domcontentloaded' });
+    await choosing.locator('.loading-screen').waitFor({ state: 'detached', timeout: 90000 });
+    if (phone) await press(choosing.getByRole('button', { name: 'Open navigation' }));
+    await press(choosing.getByRole('button', { name: 'Settings & sync' }));
+    const settings = choosing.getByRole('dialog', { name: 'Settings' });
+    const syncNow = settings.getByRole('button', { name: 'Sync now', exact: true });
+    await expect(syncNow).toBeDisabled();
+    await expect(settings.locator('.sync-folder-unsettled')).toContainText(
+      'One pCloud account can hold several libraries, each in its own folder.',
+    );
+    await press(settings.getByRole('button', { name: 'Choose folder…' }));
+    const chooser = choosing.getByRole('dialog', { name: 'Folder in pCloud' });
+    // The library that is there is found, and joining it is what is offered.
+    await expect(chooser.getByRole('radio', { name: /Join an existing library/ })).toBeChecked();
+    await expect(chooser.locator('.sync-folder-trail')).toHaveText('pCloudBever');
+    await expect(chooser.getByText('This folder holds a library.')).toBeVisible();
+    await expect(chooser.getByRole('button', { name: 'Synchronize with this library' })).toBeEnabled();
+    await choosing.screenshot({
+      path: `test-results/bever-sync-folder-existing-${phone ? 'mobile' : 'desktop'}.png`,
+    });
+    if (phone) {
+      // Back closes the chooser and leaves Settings as it was.
+      await choosing.goBack();
+      await expect(chooser).toHaveCount(0);
+      await expect(settings).toBeVisible();
+      await press(settings.getByRole('button', { name: 'Choose folder…' }));
+      await expect(chooser.getByText('This folder holds a library.')).toBeVisible();
+    } else {
+      await choosing.keyboard.press('Escape');
+      await expect(chooser).toHaveCount(0);
+      await expect(settings).toBeVisible();
+      await press(settings.getByRole('button', { name: 'Choose folder…' }));
+      await expect(chooser.getByText('This folder holds a library.')).toBeVisible();
+    }
+
+    // A new library is not started in the other, nor under its name.
+    await press(chooser.getByText('Start a new library'));
+    const name = chooser.getByLabel('Name of the new folder');
+    await expect(name).toHaveValue('Bever 2');
+    await expect(chooser.locator('.sync-folder-list > button')).toHaveText([
+      'Bever',
+      'Documents',
+      'Family',
+      'Photos',
+    ]);
+    // A folder further in that holds a library says so, and nothing is
+    // started inside it.
+    await press(chooser.getByRole('button', { name: 'Family' }));
+    await expect(chooser.locator('.sync-folder-trail')).toHaveText('pCloudFamily');
+    await expect(name).toHaveValue('Bever');
+    await press(chooser.getByRole('button', { name: 'Her notes' }));
+    await expect(chooser.getByText('A new one cannot be started inside it.')).toBeVisible();
+    await expect(name).toHaveCount(0);
+    await press(chooser.getByRole('button', { name: 'Go up a folder' }));
+    await expect(chooser.locator('.sync-folder-trail')).toHaveText('pCloudFamily');
+    // The trail leads back up; a folder with other things in it is refused,
+    // in words, and the chooser stays.
+    await press(chooser.locator('.sync-folder-trail').getByRole('button', { name: 'pCloud', exact: true }));
+    await expect(chooser.getByRole('button', { name: 'Photos' })).toBeVisible();
+    if (phone) await name.tap();
+    await name.fill('Documents');
+    await press(chooser.getByRole('button', { name: 'Start library here' }));
+    await expect(chooser.getByRole('alert')).toHaveText(
+      '/Documents has other things in it. A library needs a folder of its own: give the new one another name.',
+    );
+    await name.fill('a/b');
+    await press(chooser.getByRole('button', { name: 'Start library here' }));
+    await expect(chooser.getByRole('alert')).toHaveText('A name cannot have / or \\ in it.');
+    await name.fill('Notes of mine');
+    await expect(chooser.getByText('The library will be kept in /Notes of mine.')).toBeVisible();
+    await checkFullyInViewport(choosing, chooser.getByRole('button', { name: 'Start library here' }));
+    await choosing.screenshot({
+      path: `test-results/bever-sync-folder-new-${phone ? 'mobile' : 'desktop'}.png`,
+    });
+    await press(chooser.getByRole('button', { name: 'Start library here' }));
+    await expect(chooser).toHaveCount(0);
+    await expect(settings.locator('.sync-folder-line')).toContainText(
+      'Kept in the pCloud folder /Notes of mine',
+    );
+    await expect(syncNow).toBeEnabled();
+
+    // Changing it shows the folder in use; leaving it for the other
+    // library is asked about first, and can be declined.
+    await press(settings.getByRole('button', { name: 'Change…' }));
+    await expect(chooser.getByText('It is the one this device synchronizes with.')).toBeVisible();
+    await expect(chooser.getByRole('button', { name: 'This is the folder in use' })).toBeDisabled();
+    await press(chooser.locator('.sync-folder-trail').getByRole('button', { name: 'pCloud', exact: true }));
+    await press(chooser.getByRole('button', { name: 'Bever', exact: true }));
+    await press(chooser.getByRole('button', { name: 'Synchronize with this library' }));
+    const asking = choosing.getByRole('dialog', { name: 'Join this library?' });
+    await expect(asking).toContainText('A note that both have, and have differently, is kept twice.');
+    await press(asking.locator('.dialog-actions').getByRole('button', { name: 'Cancel' }));
+    await expect(chooser).toBeVisible();
+    await press(chooser.getByRole('button', { name: 'Synchronize with this library' }));
+    await press(asking.getByRole('button', { name: 'Join library' }));
+    await expect(chooser).toHaveCount(0);
+    await expect(settings.locator('.sync-folder-line')).toContainText('Kept in the pCloud folder /Bever');
+    await context.close();
+  }
 
   // Importing from the Evernote application on this computer: the source is
   // asked for, the notebooks are shown by stack, and any of them can be left out.
@@ -3060,10 +3178,21 @@ try {
       { x: centre.x - spread, y: centre.y - spread * 0.4, id: 1 },
       { x: centre.x + spread, y: centre.y + spread * 0.4, id: 2 },
     ];
+    // A finger is on the page, not on a drawing of it. A drawing is replaced
+    // by a sharper one at any moment, and the rest of a finger's movement
+    // goes to what it was put on and nowhere else: put on a drawing that is
+    // then replaced, the fingers were followed no further.
+    for (const finger of two(40)) {
+      expect(await handheld.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.className, finger)).toBe(
+        'pdf-sheet',
+      );
+    }
     await fingers.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: two(40) });
     for (let step = 1; step <= 20; step += 1) {
       await fingers.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: two(40 + step * 4) });
-      await handheld.waitForTimeout(16);
+      // Halfway the fingers rest, long enough for the pages to be drawn
+      // again at their new size under them, and then go on.
+      await handheld.waitForTimeout(step === 10 ? 500 : 16);
     }
     await handheld.waitForTimeout(60);
     await fingers.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });

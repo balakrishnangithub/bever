@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.6.0 — 2026-11-20
+
+A library is kept in a pCloud folder you choose, so that one pCloud account can hold several libraries that never mix: yours and another person's, each in a folder of its own. A device either starts a new library or joins one that is there.
+
+### Added
+
+- **The folder a library is kept in is chosen.** Until now every library was synchronized with `/Bever`, so two people who shared a pCloud account had their notes merged into one library. After connecting pCloud, Bever now asks where the library is kept:
+  - **Start a new library** makes a folder for it where you say, named `Bever` unless you name it otherwise; where that name is taken, `Bever 2` is offered. Every note of the device is uploaded to it. This is for the first device of a library, and for a library that is to stay apart from one already in the account.
+  - **Join an existing library** is for another device of a library that is in pCloud already. The folders of the account are shown one level at a time, and a folder that holds a library says so when it is opened. A library at `/Bever` is looked for first and offered, since the device being set up is most often another device of that library.
+- **A folder holds one library, and says which.** A folder that holds a library has a small file, `library.json`, that names it. A new library cannot be started in a folder that holds one, nor among other files: it needs a folder that is new or empty. The folder is marked the moment it is chosen, before anything is synchronized, so that a second device cannot start another library in it meanwhile.
+- **Changing the folder.** **Change…**, beside the folder's name in Settings, keeps the library in another folder or joins another library. A device that has notes of its own is asked before it joins a library, because the two become one: the notes of each go to the other, a note that both have differently is kept twice (as a conflict copy), and a note the library had deleted that the device still has stays. Nothing is ever removed from the folder that is left.
+- **A folder that was moved or renamed in pCloud is found again.** Chosen as an existing library, it is recognised as the library the device synchronizes with, and the next run goes on from where the last one ended: nothing is transferred again.
+
+### Changed
+
+- **A folder that is gone is said to be gone, and is not made again.** When the library's folder had been removed, moved or renamed in pCloud, a run made a new, empty `/Bever` and took it for the library, with all its notes already in it: nothing was uploaded, and nothing said so. A run now stops and says that the folder is not there any more, and what to choose in Settings. It also stops when the folder holds another library than the one the device synchronizes with, instead of merging the two. Nothing is changed on either side by a run that stops this way.
+- **A device that is connected but has never synchronized is asked for the folder before its first run.** **Sync now** is unavailable until then.
+- The first run in a folder makes one request more, to name the library; the first run of another device makes two more, to read the name. A run with nothing to do still makes two requests: which library the folder holds is read from the listing a run begins with.
+
+### Fixed
+
+- **Two fingers on a PDF could stop being followed in the middle of their movement.** A page of a PDF is drawn again, sharper, whenever its size has changed and the fingers rest for a moment, and the old drawing is taken away. The fingers had been put on that drawing, and a browser sends the rest of a finger's movement to what the finger was put on and nowhere else: so the page stopped growing, and was not told when the fingers lifted. Fingers are now on the page itself, which stays. It showed where drawing is slow and the fingers pause, and was found because the computer the checks run on was slow enough on the day of this release; 1.5.0 has it too.
+- Fingers lifted from a PDF before the screen had drawn their last movement left the page at the size before that movement. The last movement is now shown as the fingers lift.
+
+### Compatibility
+
+- **A library that has been synchronized stays where it is.** It is kept in `/Bever`, is asked nothing, and its next run transfers nothing but what changed and one small file, `library.json`. Versions from 1.0.0 to 1.5.0 ignore that file, so a device that still runs one of them goes on synchronizing with the same folder.
+- Nothing changes in how notes are kept on the device or in pCloud. The folder and the name of its library are settings of the device and are not synchronized.
+
+### What was verified
+
+- **Against pCloud itself** (`pcloud_selftest`, inside a folder it makes and removes): two libraries started side by side in folders of their own; a folder that is taken is refused to the second; neither library receives anything of the other, and each folder holds its own notes; a third device joins one of them and receives that library's notes and no others; a folder that is removed is missed in words, is not made again, and the notes on the device are as they were; started anew, the library is uploaded whole. It made 38 checks in all, the numbers of requests in `docs/sync.md` among them, and removed its folder.
+- **In tests of the Rust core, against a storage in memory:** the same, and a library from before folders were chosen that goes on where it was, names its folder once, and is recognised by its other devices; a folder that was moved, missed, and found again without a transfer; another library put in the folder, which is not taken for this one; two libraries joined, with a note that both had differently kept twice, a note deleted in one kept, and the folder that was left unchanged.
+- **In the built Windows application** (`npm run test:sync`, against a stand-in for pCloud that also holds a folder of other things and somebody else's library): a library that was never synchronized cannot be synchronized until a folder is chosen; the chooser refuses a folder that has other things in it and makes the one it is told; the folder in use is told from the folder of the other library, and looking at either changes nothing; at the end the library's folder is removed, the run says so and does not make it again, and the library, started anew, is uploaded whole. The synchronization check passed (16 checks with an empty library, 15 with an export), and so did the general check (`npm run test:native`: 28 and 33).
+- **In the browser check,** wide and in a phone's window with touches: the chooser offers the library that is there; Escape, and Back on the phone, close the chooser and leave Settings open; a new library is offered beside the other under a name that is free; a folder further in that holds a library says so and nothing is started inside it; a folder with other things in it and a name with a slash are refused in words; the folder chosen is shown in Settings and can be changed, and joining another library is asked about first and can be declined.
+- **The two fingers on a PDF,** in the browser check: the check of 1.5.0 failed on the unchanged source of 1.5.0 on the day of this release, the page having received the fingers' first movements and then nothing, not even their lifting. With the fingers on the page it passes, also with a rest in the middle of the movement long enough for the pages to be drawn again under them, which the check now has; and it checks that what is under a finger is the page and not a drawing. That the last movement is shown as the fingers lift is by reading the code: no check lifts them before a picture is drawn.
+- Automated: 190 tests of the Rust core and 13 of its round trips through ENEX, 28 of the native shell, 273 of the interface, and the browser check. `cargo audit` and `npm audit` find no vulnerability.
+- The Windows program and the Android package were built from the released source.
+
+### Not verified
+
+- **On a phone.** The chooser was not run on a phone. It is the same interface as on Windows, in a window of a phone's size with touches; what the phone adds is its own Back, which closes the chooser by the same means as every other dialog.
+- **Two real people.** The two libraries of the tests were two temporary libraries on one computer, in one pCloud account.
+- The Windows installers were built, not run.
+
 ## 1.5.0 — 2026-11-19
 
 Back goes back to where you were: out of a search to the notebook, out of the notebook to where it was chosen, and out of Bever only when there is nowhere left to go back to. A link that says nothing but the address of a note is shown by the note's title, as Evernote shows it. A stack or a tag found on the screens of notebooks and tags can be unfolded.

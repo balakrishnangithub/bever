@@ -5,7 +5,8 @@ Bever uses pCloud as file storage. It does not deploy compute, a database, or an
 ## Remote layout
 
 ```text
-/Bever/
+/Bever/                  the folder chosen for the library; this is its name unless another is given
+  library.json           says that the folder holds a library, and which
   metadata.json          stacks, notebooks, tags, shortcuts, and their deletions
   items/
     note-<uuid>.json     one note, or the record of its deletion
@@ -18,6 +19,33 @@ A note envelope holds the note's ID, a revision that only grows, the update time
 pCloud's listing of a folder gives, for every file, a number that stands for its content. The library keeps the number it last saw for each envelope and for the metadata, so listing the two folders is enough to tell what changed: nothing is downloaded to find out.
 
 Every device that synchronizes a library must run the same version.
+
+## Where a library is kept
+
+A library is kept in one folder, and a folder holds one library. One account can therefore hold several: two people who share an account, or one person with two libraries, each in a folder of its own. Nothing of one is read or written by the devices of another, attachments included.
+
+The folder is chosen once on each device, in Settings, after connecting:
+
+- **Start a new library.** A folder is made where it is told, named `Bever` unless another name is given, and `Bever 2` is offered where `Bever` is taken. The folder must be new or empty: a library is not started among other things, nor in or under the name of a folder that holds a library. The folder is marked at once, before anything is synchronized, so that no second library can be started in it meanwhile. The next run uploads every note of the device.
+- **Join an existing library.** The folder of a library is opened and chosen. Its notes come to the device, and the notes of the device are added to it. A device that has notes of its own is asked first, because two libraries become one and stay one: a note that both have, and have differently, is kept twice, as a conflict copy, since neither is known to be the later; and a note the library had deleted that the device still has stays.
+
+The chooser shows the folders of the account one level at a time. Where libraries are kept unless told otherwise (`/Bever`) is looked at first, and a library found there is offered: the device that is set up is most often another device of that library.
+
+### How a library is told from another
+
+A folder that holds a library has a small file, `library.json`, with an identifier made when the library was first kept there. A device remembers the identifier of the library it synchronizes with. At the beginning of every run the folder is listed, which a run does anyway, and:
+
+- the file is there and is the one last seen: the run goes on. The listing gives what stands for the file's content, so this costs no request;
+- the file changed: it is read, once. If it names the same library, the run goes on; if it names another, the run stops and says so;
+- the file is gone, or the folder is: the run stops and says so. **A folder that is gone is not made again.** What a device knows of the storage (which notes are there, and as what) is true of one library only. An empty folder in place of the one that was there would be taken for the library with all its notes already in it, and nothing would be uploaded; another library in its place would be merged with this one.
+
+A run that stops for one of these changes nothing on either side. The folder is then chosen again in Settings: as an existing library if it was moved or renamed, as a new one if it was removed.
+
+Choosing a folder as an existing library when it holds the library the device already synchronizes with (it was moved, or renamed) keeps what the device knows: the next run transfers nothing but what changed. Choosing any other folder forgets it, because it is true of the other library: every note is then compared with what is there, or uploaded. Nothing is ever removed from the folder that is left.
+
+A library that was synchronized before folders could be chosen (1.0.0 to 1.5.0) is kept in `/Bever` and stays there without being asked anything. Its folder has no `library.json`; the first run of this version writes one, last, and the other devices learn the identifier from it. Earlier versions ignore the file.
+
+The folder, and the identifier of its library, are settings of the device. They are not synchronized.
 
 ## Connection
 
@@ -76,9 +104,12 @@ pCloud limits how often it is asked, and every request costs a round trip, so a 
 | Uploads a note with a new attachment                | 5        |
 | A change to notebooks, tags, or shortcuts, uploaded | 2 more   |
 | The same, downloaded                                | 2 more   |
+| The first run in a folder that names no library yet | 1 more   |
+| The first run after another device named it         | 2 more   |
 
 - **Two listings open every run**: of the library's folder, which shows whether the metadata changed, and of the notes, which shows which notes did. A run with nothing to do ends there, without loading a note.
 - **Folders are made only when the listing shows them missing**, which is the first run.
+- **Which library the folder holds is read from the same listing**: the file that says so is downloaded only when it is not the one last seen.
 - **Notes are uploaded together**: the 32 of a batch go in one request, or in a few when they are very long (8 MiB a request). Deletions travel the same way. A request that fails midway may have stored some of its notes; the next run finds them, sees they are its own, and sends only the rest.
 - **Attachments are uploaded one in a request**, and the list of those the remote holds is asked for only when a note with an attachment is uploaded.
 - **A download takes two requests a file**: pCloud first gives the address of a file's content and then the content. A new device therefore makes about two requests for every note and attachment it receives.
@@ -156,14 +187,14 @@ This is a simple revision-based format, not a CRDT or an end-to-end encrypted va
 
 pCloud is the one storage service Bever synchronizes with. What is not pCloud's own is kept apart from it, so that another service means writing what is that service's and nothing twice:
 
-- **The engine** (`sync/mod.rs`, `notes.rs`, `metadata.rs`, `transfer.rs`, `history.rs`) knows a storage only as the `RemoteStore` trait: make a folder, list one, download a file, upload files. Revisions, conflicts, deletions, the order of a run, holding back a note whose file cannot be read, stopping, and the record of runs are all here.
+- **The engine** (`sync/mod.rs`, `notes.rs`, `metadata.rs`, `transfer.rs`, `history.rs`, `folder.rs`) knows a storage only as the `RemoteStore` trait: make a folder, list one, download a file, upload files. Revisions, conflicts, deletions, the order of a run, holding back a note whose file cannot be read, stopping, and the record of runs are all here. So is the folder a library is kept in (`folder.rs`): what is shown of a folder to whoever chooses one, what choosing does to the library, and how a run tells its library from another. A further service gets all of it by listing folders, which it must do anyway.
 - **The transport** (`sync/transport.rs`) is how any service is reached over HTTP: each request runs apart from the run so that stopping is immediate, a request that does not complete is made again after growing pauses, a local file that cannot be read is told apart from a lost connection, a download arrives in pieces, addresses are kept out of errors, and everything is counted.
 - **The adapter** (`pcloud.rs`) is what is pCloud's: its hosts, its methods, the form of an upload, what its result codes mean, where content may be fetched from. The sign-in (`pcloud_auth.rs` in the shell) is pCloud's too.
-- **The shell** chooses the storage in one place (`remote_store` in `src-tauri/src/lib.rs`) and hands the engine a `RemoteStore`. The worker, its status, stopping, quitting and staying awake do not know which service it is.
+- **The shell** chooses the storage in one place (`remote_store` in `src-tauri/src/lib.rs`) and hands the engine a `RemoteStore`. The worker, its status, stopping, quitting, staying awake and choosing the folder (`sync_folder.rs`) do not know which service it is; the chooser in the interface (`SyncFolderDialog.tsx`) is told the service's name and nothing else.
 
 ## Testing
 
-The engine talks to storage through the `RemoteStore` trait. Tests run two libraries against an in-memory implementation with failure injection and cover push, pull, conflict copies, note and metadata deletion, name merges, an interrupted run that is resumed, a device that joins while another is still uploading, a notebook list changed by another device during a run, a deletion record uploaded once, a missing attachment, an attachment that cannot be read, a run that is stopped and finished by the next, the record of runs, a request cut off after some of its notes were stored, and the number of requests each kind of run makes.
+The engine talks to storage through the `RemoteStore` trait. Tests run two libraries against an in-memory implementation with failure injection and cover push, pull, conflict copies, note and metadata deletion, name merges, an interrupted run that is resumed, a device that joins while another is still uploading, a notebook list changed by another device during a run, a deletion record uploaded once, a missing attachment, an attachment that cannot be read, a run that is stopped and finished by the next, the record of runs, a request cut off after some of its notes were stored, and the number of requests each kind of run makes. For the folder: two libraries in one account that never see each other's notes, a folder that is taken and cannot be taken again, a library from before folders were chosen that goes on where it was, a folder that was moved and is found again without a transfer, another library in the folder that is not taken for this one, and two libraries joined with nothing lost.
 
 The transport is tested against a server on the same computer: an upload and a download that are stopped while nothing moves return within moments, a pause between attempts ends when the run is stopped, a request that is turned away is made again and counted, one that is refused is not, a download that breaks off is asked for again, a local file that cannot be read is not taken for a lost connection, and a full disk is not taken for one either. The pCloud adapter is tested against such a server answering as pCloud does: files go up and come down, content is fetched only from where the service is, and pCloud's own word for being asked too much is counted.
 
@@ -175,9 +206,9 @@ cargo build --release -p bever-core --example import_enex
 npm run test:sync
 ```
 
-It stops a run while it goes, holds a file so that it cannot be read, closes the window during a run, stops that run and sees the application leave, kills the application during a run, and reads the record of runs after each restart. The application is told where the stand-in listens in `BEVER_PCLOUD_STAND_IN`, which must be `http://127.0.0.1:<port>` and is listened to only by a library that is itself named by `BEVER_DATA_DIR`. The installed application never does. While a stand-in is used no sign-in is read, saved, removed or sent, and nothing goes anywhere but to this computer. `BEVER_SYNC_ENEX` adds the notes of an export to the run.
+It chooses the folder of the library in the chooser, where the stand-in also has a folder of other things and the library of somebody else. It stops a run while it goes, holds a file so that it cannot be read, closes the window during a run, stops that run and sees the application leave, kills the application during a run, reads the record of runs after each restart, and at the end removes the library's folder and sees the run miss it in words, without making it again. The application is told where the stand-in listens in `BEVER_PCLOUD_STAND_IN`, which must be `http://127.0.0.1:<port>` and is listened to only by a library that is itself named by `BEVER_DATA_DIR`. The installed application never does. While a stand-in is used no sign-in is read, saved, removed or sent, and nothing goes anywhere but to this computer. `BEVER_SYNC_ENEX` adds the notes of an export to the run.
 
-`pcloud_selftest` runs the same engine against a real account, including a run that is cut off after its notes and joined by a second device, and checks the request counts in the table above against pCloud itself. It works only inside a folder it creates, `/Bever-selftest-<random>`, and removes that folder afterwards; it never reads or writes `/Bever`.
+`pcloud_selftest` runs the same engine against a real account, including a run that is cut off after its notes and joined by a second device, and two libraries side by side in folders of their own, one of which is removed; it checks the request counts in the table above against pCloud itself. It works only inside a folder it creates, `/Bever-selftest-<random>`, and removes that folder afterwards; it never reads or writes `/Bever`.
 
 ```sh
 cargo run --release -p bever-core --example pcloud_selftest

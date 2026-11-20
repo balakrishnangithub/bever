@@ -587,6 +587,9 @@ export class PdfView {
     const ended = (event: TouchEvent) => {
       this.lastTouch = event.timeStamp;
       if (event.touches.length < 2 && this.pinch) {
+        // What the fingers said last is shown, though the screen had not
+        // drawn it yet: a slow device draws seldom, and fingers lift fast.
+        if (this.pinchWanted) this.show(this.pinchWanted.zoom, this.pinch.anchor, this.pinchWanted.at);
         this.endPinch();
         const view = this.scroller.getBoundingClientRect();
         // Left almost at the width of the view, it is put there.

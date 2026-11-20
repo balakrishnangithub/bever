@@ -1,7 +1,11 @@
 //! End-to-end synchronization between libraries through an in-memory remote.
 use serde_json::json;
 
-use super::{remote::memory::MemoryRemote, sync_with_remote, Cancel, RunOutcome, SyncOptions};
+use super::{
+    folder::{choose, look, Choice},
+    remote::memory::MemoryRemote,
+    sync_with_remote, Cancel, RemoteStore, RunOutcome, SyncOptions,
+};
 use crate::{
     db::Library,
     error::BeverError,
@@ -306,8 +310,9 @@ fn notes_are_uploaded_together() {
     assert_eq!(first.sync(&remote).pushed, 20);
     assert_eq!(note_uploads(&remote).len(), 20);
     // The folder is looked for and, with the two inside it, made; the notes
-    // go in one request; and the notebook list is looked for and uploaded.
-    assert_eq!(remote.requests() - before, 7);
+    // go in one request; the notebook list is looked for and uploaded; and
+    // the folder is made to say which library it holds.
+    assert_eq!(remote.requests() - before, 8);
 
     // More notes than are handled at a time take a request for each lot,
     // and deletions travel together too.
@@ -1320,4 +1325,302 @@ fn a_pin_and_a_thumbnail_choice_reach_the_other_device_without_moving_the_date()
     assert!(first.note(&id).attributes["application-data"]
         .get("bever.pinned")
         .is_none());
+}
+
+// --- The folder a library is kept in ----------------------------------------
+
+/// Synchronizes with the folder that was chosen for the device's library.
+fn sync_chosen(device: &Device, remote: &MemoryRemote) -> crate::error::Result<SyncReport> {
+    let options = SyncOptions {
+        remote_root: device.library.sync_folder().unwrap().expect("a folder"),
+        ..SyncOptions::default()
+    };
+    sync_with_remote(&device.library, remote, &options, |_| {})
+}
+
+#[test]
+fn two_libraries_in_one_account_each_keep_to_a_folder_of_their_own() {
+    let remote = MemoryRemote::new();
+    let (his, hers, his_phone) = (Device::new(), Device::new(), Device::new());
+    his.add("His note", "Body", &["his"]);
+    hers.add("Her note", "Body", &["hers"]);
+    // Until a folder is chosen there is none.
+    assert_eq!(his.library.sync_folder().unwrap(), None);
+
+    choose(&his.library, &remote, "/Bever", Choice::New).unwrap();
+    assert_eq!(
+        his.library.sync_folder().unwrap().as_deref(),
+        Some("/Bever")
+    );
+    // The folder is taken from then on, before anything is synchronized:
+    // a second library cannot be started in it,
+    let taken = choose(&hers.library, &remote, "/Bever", Choice::New).unwrap_err();
+    assert!(
+        taken.to_string().contains("already holds a library"),
+        "{taken}"
+    );
+    assert_eq!(hers.library.sync_folder().unwrap(), None);
+    // nor in a folder that has other things in it,
+    remote.ensure_folder("/Photos").unwrap();
+    remote
+        .upload("/Photos/beach.jpg", b"jpeg".to_vec())
+        .unwrap();
+    let used = choose(&hers.library, &remote, "/Photos", Choice::New).unwrap_err();
+    assert!(used.to_string().contains("other things in it"), "{used}");
+    // and a folder that holds no library cannot be joined.
+    let none = choose(&hers.library, &remote, "/Photos", Choice::Existing).unwrap_err();
+    assert!(
+        none.to_string().contains("does not hold a library"),
+        "{none}"
+    );
+    assert!(choose(&hers.library, &remote, "/Nowhere", Choice::Existing).is_err());
+    for invalid in [
+        "", "/", "Bever", "/Bever/", "/a/../b", "/a//b", "/a/ b", "/a\\b",
+    ] {
+        assert!(
+            choose(&hers.library, &remote, invalid, Choice::New).is_err(),
+            "{invalid:?}"
+        );
+    }
+    // An empty folder that is there already will do.
+    remote.ensure_folder("/Family").unwrap();
+    remote.ensure_folder("/Family/Her notes").unwrap();
+    choose(&hers.library, &remote, "/Family/Her notes", Choice::New).unwrap();
+
+    sync_chosen(&his, &remote).unwrap();
+    sync_chosen(&hers, &remote).unwrap();
+    sync_chosen(&his, &remote).unwrap();
+    sync_chosen(&hers, &remote).unwrap();
+    assert_eq!(his.titles(), ["His note"]);
+    assert_eq!(hers.titles(), ["Her note"]);
+    let notes_in = |folder: &str| {
+        remote
+            .paths()
+            .iter()
+            .filter(|path| path.starts_with(&format!("{folder}/items/")))
+            .count()
+    };
+    assert_eq!((notes_in("/Bever"), notes_in("/Family/Her notes")), (1, 1));
+
+    // Another device of his joins his library and gets his notes alone.
+    let there = look(&his_phone.library, &remote, "/Bever").unwrap();
+    assert!(there.holds_library && !there.ours && there.folders.is_empty());
+    choose(&his_phone.library, &remote, "/Bever", Choice::Existing).unwrap();
+    assert_eq!(sync_chosen(&his_phone, &remote).unwrap().pulled, 1);
+    assert_eq!(his_phone.titles(), ["His note"]);
+    assert_eq!(notes_in("/Family/Her notes"), 1);
+    assert!(look(&his_phone.library, &remote, "/Bever").unwrap().ours);
+    assert!(!look(&hers.library, &remote, "/Bever").unwrap().ours);
+
+    // What is at the top, for choosing: folders in the order names are read
+    // in, and nothing is said to hold a library that does not.
+    let top = look(&hers.library, &remote, "/").unwrap();
+    assert_eq!(top.folders, ["Bever", "Family", "Photos"]);
+    assert!(!top.holds_library && !top.empty);
+    let family = look(&hers.library, &remote, "/Family").unwrap();
+    assert_eq!(family.folders, ["Her notes"]);
+    assert!(look(&hers.library, &remote, "/Nowhere").is_err());
+}
+
+#[test]
+fn a_library_synchronized_before_folders_were_chosen_goes_on_where_it_was() {
+    let remote = MemoryRemote::new();
+    let (first, second, third) = (Device::new(), Device::new(), Device::new());
+    first.add("Kept", "Body", &[]);
+    for device in [&first, &second, &third, &first, &second, &third] {
+        device.sync(&remote);
+    }
+    // As such a library is: the folder does not say what it holds, and no
+    // device knows a name for it.
+    remote.remove("/Bever/library.json");
+    for device in [&first, &second, &third] {
+        let connection = device.library.connection.lock();
+        connection
+            .execute("DELETE FROM settings WHERE key = 'sync_library'", [])
+            .unwrap();
+    }
+    assert_eq!(
+        first.library.sync_folder().unwrap().as_deref(),
+        Some("/Bever")
+    );
+    let there = look(&first.library, &remote, "/Bever").unwrap();
+    assert!(
+        there.holds_library && there.ours,
+        "it knows its folder for its own"
+    );
+    assert!(
+        !look(&Device::new().library, &remote, "/Bever")
+            .unwrap()
+            .ours
+    );
+
+    // The first run after names the library, once, and transfers nothing
+    // else; the other device learns the name from the folder.
+    remote.take_uploads();
+    let before = remote.requests();
+    let report = sync_chosen(&first, &remote).unwrap();
+    assert_eq!((report.pushed, report.pulled), (0, 0));
+    assert_eq!(remote.requests() - before, 3);
+    assert_eq!(remote.take_uploads(), ["/Bever/library.json"]);
+    let before = remote.requests();
+    assert_eq!(sync_chosen(&second, &remote).unwrap().pulled, 0);
+    assert_eq!(remote.requests() - before, 3, "the name is read once");
+    // A device that is told its folder by hand keeps what it knows of it.
+    assert!(look(&third.library, &remote, "/Bever").unwrap().ours);
+    choose(&third.library, &remote, "/Bever", Choice::Existing).unwrap();
+    remote.take_downloads();
+    let before = remote.requests();
+    let report = sync_chosen(&third, &remote).unwrap();
+    assert_eq!((report.pushed, report.pulled), (0, 0));
+    assert_eq!(remote.requests() - before, 2);
+    assert!(remote.take_downloads().is_empty());
+    for device in [&first, &second, &first] {
+        let before = remote.requests();
+        sync_chosen(device, &remote).unwrap();
+        assert_eq!(remote.requests() - before, 2);
+    }
+    assert!(remote.take_uploads().is_empty());
+    assert!(look(&second.library, &remote, "/Bever").unwrap().ours);
+}
+
+#[test]
+fn a_folder_that_was_moved_is_missed_and_found_again_without_a_transfer() {
+    let remote = MemoryRemote::new();
+    let (first, second) = (Device::new(), Device::new());
+    let id = first.add("Moved along", "Body", &[]);
+    choose(&first.library, &remote, "/Bever", Choice::New).unwrap();
+    sync_chosen(&first, &remote).unwrap();
+    choose(&second.library, &remote, "/Bever", Choice::Existing).unwrap();
+    sync_chosen(&second, &remote).unwrap();
+    sync_chosen(&first, &remote).unwrap();
+
+    remote.ensure_folder("/Notes").unwrap();
+    remote.rename("/Bever", "/Notes/Ours");
+    // The folder is not made again: an empty one would be taken for the
+    // library, with all its notes already in it.
+    let missed = sync_chosen(&first, &remote).unwrap_err();
+    assert!(
+        missed.to_string().contains("is not there any more"),
+        "{missed}"
+    );
+    assert!(remote.list("/Bever").unwrap().is_none());
+    assert_eq!(first.titles(), ["Moved along"]);
+
+    assert!(look(&first.library, &remote, "/Notes/Ours").unwrap().ours);
+    choose(&first.library, &remote, "/Notes/Ours", Choice::Existing).unwrap();
+    remote.take_downloads();
+    remote.take_uploads();
+    let before = remote.requests();
+    let report = sync_chosen(&first, &remote).unwrap();
+    assert_eq!((report.pushed, report.pulled), (0, 0));
+    assert_eq!(
+        remote.requests() - before,
+        2,
+        "it goes on from where it was"
+    );
+    assert!(remote.take_downloads().is_empty() && remote.take_uploads().is_empty());
+
+    // And an edit made meanwhile on the other device arrives as ever.
+    choose(&second.library, &remote, "/Notes/Ours", Choice::Existing).unwrap();
+    second.edit(&id, "Moved along", "Edited", &[]);
+    assert_eq!(sync_chosen(&second, &remote).unwrap().pushed, 1);
+    assert_eq!(sync_chosen(&first, &remote).unwrap().pulled, 1);
+    assert_eq!(first.note(&id).content_html, "<p>Edited</p>");
+}
+
+#[test]
+fn another_library_in_the_folder_is_not_taken_for_this_one() {
+    let remote = MemoryRemote::new();
+    let (his, hers) = (Device::new(), Device::new());
+    his.add("His note", "Body", &[]);
+    hers.add("Her note", "Body", &[]);
+    choose(&his.library, &remote, "/Bever", Choice::New).unwrap();
+    sync_chosen(&his, &remote).unwrap();
+
+    // His folder is removed, and she starts her library under its name.
+    remote.remove_folder("/Bever");
+    choose(&hers.library, &remote, "/Bever", Choice::New).unwrap();
+    sync_chosen(&hers, &remote).unwrap();
+    let hers_there = remote.paths();
+
+    // His device knows of one note there, and that it has nothing to send.
+    // It stops, and neither side is changed.
+    let refused = sync_chosen(&his, &remote).unwrap_err();
+    assert!(
+        refused.to_string().contains("no longer holds the library"),
+        "{refused}"
+    );
+    assert_eq!(his.titles(), ["His note"]);
+    assert_eq!(remote.paths(), hers_there);
+    // So does a device whose folder was emptied and says nothing any more.
+    remote.remove("/Bever/library.json");
+    assert!(sync_chosen(&his, &remote).is_err());
+    assert!(sync_chosen(&hers, &remote).is_err());
+
+    // Each chooses anew. She says the folder is hers; he starts his own.
+    choose(&hers.library, &remote, "/Bever", Choice::Existing).unwrap();
+    choose(&his.library, &remote, "/Bever of his", Choice::New).unwrap();
+    sync_chosen(&hers, &remote).unwrap();
+    let report = sync_chosen(&his, &remote).unwrap();
+    assert_eq!((report.pushed, report.pulled), (1, 0), "all he has is sent");
+    assert_eq!(his.titles(), ["His note"]);
+    assert_eq!(hers.titles(), ["Her note"]);
+}
+
+#[test]
+fn joining_another_library_adds_each_to_the_other_and_loses_nothing() {
+    let remote = MemoryRemote::new();
+    let (first, second) = (Device::new(), Device::new());
+    let both = first.add("Shared", "As it was", &[]);
+    let gone = first.add("Deleted there", "Body", &[]);
+    choose(&first.library, &remote, "/One", Choice::New).unwrap();
+    sync_chosen(&first, &remote).unwrap();
+    choose(&second.library, &remote, "/One", Choice::Existing).unwrap();
+    sync_chosen(&second, &remote).unwrap();
+
+    // The second device goes its own way, in a library of its own, where
+    // it changes one note, deletes another, and writes a third.
+    choose(&second.library, &remote, "/Two", Choice::New).unwrap();
+    assert_eq!(sync_chosen(&second, &remote).unwrap().pushed, 2);
+    second.edit(&both, "Shared", "As it became", &[]);
+    second.library.delete_note_permanently(&gone).unwrap();
+    second.add("Only there", "Body", &[]);
+    sync_chosen(&second, &remote).unwrap();
+    first.add("Only here", "Body", &[]);
+    sync_chosen(&first, &remote).unwrap();
+    let in_one = remote
+        .paths()
+        .into_iter()
+        .filter(|path| path.starts_with("/One/"))
+        .map(|path| (remote.file(&path), path))
+        .collect::<Vec<_>>();
+
+    // The first joins that library. Neither is known to be the later, so
+    // what both have differently is kept twice, and what was deleted there
+    // and is still here stays.
+    choose(&first.library, &remote, "/Two", Choice::Existing).unwrap();
+    let report = sync_chosen(&first, &remote).unwrap();
+    assert_eq!(report.conflicts, 1);
+    assert_eq!(
+        first.titles(),
+        [
+            "Deleted there",
+            "Only here",
+            "Only there",
+            "Shared",
+            "Shared (conflict copy)"
+        ]
+    );
+    assert_eq!(first.note(&both).content_html, "<p>As it became</p>");
+    sync_chosen(&second, &remote).unwrap();
+    assert_eq!(second.titles(), first.titles());
+    // The folder that was left is as it was.
+    for (content, path) in in_one {
+        assert_eq!(remote.file(&path), content, "{path}");
+    }
+    // And it is settled: nothing more goes either way.
+    for device in [&first, &second] {
+        let report = sync_chosen(device, &remote).unwrap();
+        assert_eq!((report.pushed, report.pulled, report.conflicts), (0, 0, 0));
+    }
 }

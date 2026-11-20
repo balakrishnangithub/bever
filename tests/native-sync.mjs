@@ -106,9 +106,18 @@ const allAttachments = readdirSync(join(dataDirectory, 'blobs'), {
 // uses. It can be told to take uploads slowly, or to answer late, so that a
 // run lasts long enough to be stopped.
 const remote = {
-  folders: new Set(['/']),
+  // What an account has besides: a folder of other things, and, further
+  // in, the library of somebody else, written before libraries were named.
+  folders: new Set([
+    '/',
+    '/Photos',
+    '/Family',
+    '/Family/Other',
+    '/Family/Other/items',
+    '/Family/Other/blobs',
+  ]),
   /** path -> { size, hash, content } ; the content of attachments is not kept. */
-  files: new Map(),
+  files: new Map([['/Photos/beach.jpg', { size: 4, hash: -1, content: Buffer.from('jpeg') }]]),
   /** Bytes a second at which an upload is taken, or 0 for at once. */
   rate: 0,
   /** Milliseconds every answer is held back. */
@@ -160,10 +169,13 @@ const server = createServer(async (request, response) => {
     if (url.pathname === '/listfolder') {
       if (!remote.folders.has(path))
         return await answer({ result: 2005, error: 'Directory does not exist.' });
-      const prefix = `${path}/`;
+      const prefix = path === '/' ? '/' : `${path}/`;
       const contents = [
         ...[...remote.folders]
-          .filter((folder) => folder.startsWith(prefix) && !folder.slice(prefix.length).includes('/'))
+          .filter(
+            (folder) =>
+              folder !== path && folder.startsWith(prefix) && !folder.slice(prefix.length).includes('/'),
+          )
           .map((folder) => ({ isfolder: true, name: folder.slice(prefix.length) })),
         ...remote.under(path).map((file) => ({
           isfolder: false,
@@ -354,9 +366,36 @@ try {
   page.on('pageerror', (error) => errors.push(error.message));
   let { settings, syncNow, stop, runs } = await openSettings(page);
   await expect(settings.locator('.setting-ok').first()).toContainText('Connected');
-  await expect(syncNow).toBeEnabled();
   await expect(stop).toHaveCount(0);
   check('the application takes the stand-in for pCloud, and no sign-in');
+
+  // --- Where the library is kept ---------------------------------------------
+  // A library that was never synchronized has no folder, and cannot be
+  // synchronized until it has one.
+  await expect(syncNow).toBeDisabled();
+  await settings.getByRole('button', { name: 'Choose folder…' }).click();
+  const chooser = page.getByRole('dialog', { name: 'Folder in pCloud' });
+  // No library is where one would be looked for first: a new one is offered.
+  await expect(chooser.getByRole('radio', { name: /Start a new library/ })).toBeChecked();
+  await expect(chooser.locator('.sync-folder-list > button')).toHaveText(['Family', 'Photos']);
+  const folderName = chooser.getByLabel('Name of the new folder');
+  await expect(folderName).toHaveValue('Bever');
+  // Not among other things:
+  await folderName.fill('Photos');
+  await chooser.getByRole('button', { name: 'Start library here' }).click();
+  await expect(chooser.getByRole('alert')).toContainText('/Photos has other things in it');
+  expect(remote.files.has('/Photos/library.json')).toBe(false);
+  // in a folder that is made for it, and says from then on what it holds.
+  await folderName.fill('Bever');
+  await chooser.getByRole('button', { name: 'Start library here' }).click();
+  await expect(chooser).toHaveCount(0);
+  await expect(settings.locator('.sync-folder-line')).toContainText('Kept in the pCloud folder /Bever');
+  expect(remote.folders.has('/Bever')).toBe(true);
+  expect(remote.files.has('/Bever/library.json')).toBe(true);
+  await expect(syncNow).toBeEnabled();
+  check(
+    'a library has no folder until one is chosen; it is made where it is told, and not among other things',
+  );
 
   // --- A run is stopped while it goes ---------------------------------------
   remote.rate = 1_500_000;
@@ -443,6 +482,25 @@ try {
     expect(remote.requests - asked).toBe(2);
     check('a run with nothing to do makes two requests');
   }
+
+  // The folder in use is known for what it is, and the library of somebody
+  // else for another; looking at either changes nothing.
+  const filesBefore = remote.files.size;
+  await settings.getByRole('button', { name: 'Change…' }).click();
+  await expect(chooser.getByText('It is the one this device synchronizes with.')).toBeVisible();
+  await expect(chooser.getByRole('button', { name: 'This is the folder in use' })).toBeDisabled();
+  await chooser.locator('.sync-folder-trail').getByRole('button', { name: 'pCloud', exact: true }).click();
+  await chooser.getByRole('button', { name: 'Family' }).click();
+  await chooser.getByRole('button', { name: 'Other' }).click();
+  await expect(chooser.getByText('This folder holds a library.')).toBeVisible();
+  await expect(chooser.getByText('It is the one this device synchronizes with.')).toHaveCount(0);
+  await expect(chooser.getByRole('button', { name: 'Synchronize with this library' })).toBeEnabled();
+  await page.screenshot({ path: join(root, 'test-results/native-sync-folder.png') });
+  await chooser.getByRole('button', { name: 'Close folder chooser' }).click();
+  await expect(chooser).toHaveCount(0);
+  await expect(settings.locator('.sync-folder-line')).toContainText('Kept in the pCloud folder /Bever');
+  expect(remote.files.size).toBe(filesBefore);
+  check('the folder in use is told from the folder of another library, and looking changes neither');
 
   await page.screenshot({ path: join(root, 'test-results/native-sync-complete.png') });
 
@@ -533,6 +591,38 @@ try {
   expectedNotes += 1;
   expect(notesThere()).toBe(expectedNotes);
   check('and the next run finishes what it left');
+
+  // --- A folder that is gone is missed, not made again -----------------------
+  // Removed by somebody with the account. An empty folder in its place
+  // would be taken for the library, with all its notes already in it.
+  for (const folder of [...remote.folders]) if (folder.startsWith('/Bever')) remote.folders.delete(folder);
+  for (const file of [...remote.files.keys()]) if (file.startsWith('/Bever/')) remote.files.delete(file);
+  await syncNow.click();
+  const missed = settings.locator('.sync-message.error');
+  await expect(missed).toContainText('The folder /Bever, where this library is kept, is not there any more', {
+    timeout: 30000,
+  });
+  await expect(missed).toContainText('Nothing was changed on this device');
+  expect(remote.folders.has('/Bever')).toBe(false);
+  await expect(syncNow).toBeEnabled();
+  // Started anew there, the library is uploaded whole.
+  await settings.getByRole('button', { name: 'Change…' }).click();
+  // The application was started again since the chooser was last open.
+  const chooserNow = page.getByRole('dialog', { name: 'Folder in pCloud' });
+  await chooserNow.getByText('Start a new library').click();
+  await expect(chooserNow.getByLabel('Name of the new folder')).toHaveValue('Bever');
+  await chooserNow.getByRole('button', { name: 'Start library here' }).click();
+  const leaving = page.getByRole('dialog', { name: 'Start a new library?' });
+  await expect(leaving).toContainText('uploads all its notes to /Bever');
+  await leaving.getByRole('button', { name: 'Start new library' }).click();
+  await expect(chooserNow).toHaveCount(0);
+  const whole = await finishRun(page, syncNow);
+  expectSent(whole, expectedNotes);
+  expect(notesThere()).toBe(expectedNotes);
+  await expect(missed).toHaveCount(0);
+  check(
+    `a folder that was removed is missed in plain words and not made again; started anew, all ${expectedNotes} notes go to it`,
+  );
 
   if (errors.length) throw new Error(`Errors in the application window:\n${errors.join('\n')}`);
   expect(savedLogins()).toBe(savedLoginsBefore);

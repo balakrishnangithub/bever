@@ -2664,6 +2664,10 @@ kbd {
   position: absolute;
   display: block;
   max-width: none;
+  /* A finger is on the page, not on a drawing of it. A drawing is replaced
+     by a sharper one at any moment, and what a finger was put on has to
+     stay: the rest of its movement goes to that element and to no other. */
+  pointer-events: none;
 }
 /* The whole page, stretched over it until it is drawn again at its new size. */
 .pdf-sheet .pdf-whole {
@@ -5336,4 +5340,197 @@ span.stack-toggle {
   .workspace-actions > .desktop-pin {
     display: none;
   }
+}
+
+/* Where the library is kept at the storage: the line in Settings, and the
+   dialog that chooses the folder. */
+.sync-folder-line {
+  flex-wrap: wrap;
+  column-gap: 6px;
+}
+.sync-folder-line code,
+.sync-folder-dialog code {
+  overflow-wrap: anywhere;
+  color: var(--accent-strong);
+}
+.sync-folder-unsettled {
+  display: grid;
+  justify-items: start;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 11px;
+  border: 1px solid var(--soft-line);
+  border-radius: 7px;
+  background: var(--panel-strong);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.sync-folder-unsettled p {
+  margin: 0;
+}
+.sync-folder-dialog:focus {
+  outline: none;
+}
+.sync-folder-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(480px, 100%);
+}
+.sync-folder-modes {
+  display: grid;
+  gap: 8px;
+}
+.sync-folder-modes label {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.sync-folder-modes label.chosen {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.sync-folder-modes input {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+.sync-folder-modes span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.sync-folder-modes strong {
+  display: block;
+  color: var(--ink);
+  font-size: 13px;
+}
+.sync-folder-trail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  margin-top: 16px;
+  font-size: 12px;
+}
+.sync-folder-trail span {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.sync-folder-trail svg {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  color: var(--faint);
+}
+.sync-folder-trail button {
+  overflow-wrap: anywhere;
+  padding: 4px 5px;
+  border-radius: 5px;
+  color: var(--accent);
+  text-align: left;
+}
+.sync-folder-trail button:disabled {
+  color: var(--ink);
+  cursor: default;
+}
+.sync-folder-trail button[aria-current] {
+  font-weight: 600;
+}
+.sync-folder-list {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  min-height: 132px;
+  max-height: 232px;
+  margin-top: 6px;
+  padding: 5px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.sync-folder-list[aria-busy='true'] {
+  opacity: 0.6;
+}
+.sync-folder-list > button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 36px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  text-align: left;
+}
+.sync-folder-list > button:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+.sync-folder-list > button span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.sync-folder-list > button svg {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  color: var(--faint);
+}
+.sync-folder-none,
+.sync-folder-found {
+  margin: 0;
+  padding: 10px 8px;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.sync-folder-found {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  color: var(--muted);
+}
+.sync-folder-found svg {
+  flex: 0 0 auto;
+  width: 17px;
+  height: 17px;
+  margin-top: 1px;
+  color: var(--accent);
+}
+.sync-folder-found strong {
+  color: var(--ink);
+}
+.sync-folder-act {
+  display: grid;
+  justify-items: start;
+  gap: 9px;
+  margin-top: 14px;
+}
+.sync-folder-act label {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  color: var(--muted);
+  font-size: 12px;
+}
+.sync-folder-act input {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  font-size: 13px;
+}
+.sync-folder-act .settings-pending {
+  margin-top: 0;
 }

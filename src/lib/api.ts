@@ -22,6 +22,7 @@ import type {
   SettingKey,
   Settings,
   ShortcutTarget,
+  SyncFolderView,
   SyncRun,
   SyncStatus,
   ThumbnailChoice,
@@ -123,6 +124,10 @@ export interface BeverApi {
   stopSync: () => Promise<SyncStatus>;
   /** The latest runs, newest first. */
   syncHistory: () => Promise<SyncRun[]>;
+  /** What is in a folder of the storage; `/` is its top. */
+  lookAtSyncFolder: (path: string) => Promise<SyncFolderView>;
+  /** Settles the folder the library is kept in: a new one, or one that holds a library. */
+  chooseSyncFolder: (path: string, existing: boolean) => Promise<PCloudStatus>;
   pcloudStatus: () => Promise<PCloudStatus>;
   connectPcloud: () => Promise<PCloudStatus>;
   cancelPcloudConnect: () => Promise<PCloudStatus>;
@@ -225,6 +230,8 @@ const tauriApi: BeverApi = {
   syncStatus: () => invoke('sync_status'),
   stopSync: () => invoke('stop_sync'),
   syncHistory: () => invoke('sync_history'),
+  lookAtSyncFolder: (path) => invoke('look_at_sync_folder', { path }),
+  chooseSyncFolder: (path, existing) => invoke('choose_sync_folder', { path, existing }),
   pcloudStatus: () => invoke('pcloud_status'),
   connectPcloud: () => invoke('connect_pcloud'),
   cancelPcloudConnect: () => invoke('cancel_pcloud_connect'),

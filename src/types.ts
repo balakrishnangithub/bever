@@ -417,6 +417,20 @@ export interface PCloudStatus {
   hostname: string;
   lastSyncAt: number | null;
   authorizationPending: boolean;
+  /** The folder this library is kept in there, once that is settled. */
+  folder: string | null;
+}
+
+/** A folder at the storage, as shown to whoever chooses where the library is kept. */
+export interface SyncFolderView {
+  path: string;
+  /** The folders inside; none are given of a folder that holds a library. */
+  folders: string[];
+  /** Whether nothing at all is in it. */
+  empty: boolean;
+  holdsLibrary: boolean;
+  /** Whether the library it holds is the one this device synchronizes with. */
+  ours: boolean;
 }
 
 export interface SyncProgress {

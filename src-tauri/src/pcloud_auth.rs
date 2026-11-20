@@ -49,6 +49,8 @@ pub(crate) struct PCloudStatus {
     hostname: String,
     last_sync_at: Option<i64>,
     authorization_pending: bool,
+    /// The folder this library is kept in there, once that is settled.
+    folder: Option<String>,
 }
 
 #[tauri::command]
@@ -104,6 +106,7 @@ pub(crate) fn pcloud_status_inner(library: &Library) -> BeverResult<PCloudStatus
                 .setting("last_sync_at")?
                 .and_then(|value| value.parse().ok()),
             authorization_pending: false,
+            folder: library.sync_folder()?,
         });
     }
     let hostname = library
@@ -121,6 +124,7 @@ pub(crate) fn pcloud_status_inner(library: &Library) -> BeverResult<PCloudStatus
         authorization_pending: library
             .setting("pcloud_oauth_state")?
             .is_some_and(|state| !state.is_empty()),
+        folder: library.sync_folder()?,
     })
 }
 
@@ -263,6 +267,7 @@ pub(crate) fn status_for_saved_credentials(
             .setting("last_sync_at")?
             .and_then(|value| value.parse().ok()),
         authorization_pending: false,
+        folder: library.sync_folder()?,
     })
 }
 

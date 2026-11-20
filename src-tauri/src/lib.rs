@@ -17,6 +17,7 @@ mod pcloud_auth;
 mod protocol;
 mod startup;
 mod sync_controller;
+mod sync_folder;
 mod sync_platform;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -87,7 +88,7 @@ where
 /// What this library synchronizes with, stopped by `cancel`. pCloud is the
 /// one storage service there is; another would be chosen here, and nothing
 /// else about a run would differ.
-fn remote_store(library: &Library, cancel: Cancel) -> BeverResult<Box<dyn RemoteStore>> {
+pub(crate) fn remote_store(library: &Library, cancel: Cancel) -> BeverResult<Box<dyn RemoteStore>> {
     Ok(Box::new(pcloud_auth::client(library)?.stopped_by(cancel)))
 }
 
@@ -213,14 +214,21 @@ async fn sync_history(app: AppHandle) -> Result<Vec<SyncRun>, String> {
 
 #[tauri::command]
 async fn sync_now(app: AppHandle) -> Result<SyncStatus, String> {
-    // Check the sign-in before reserving a run, so that a missing token is
-    // reported at once. A run that is already going needs no check.
-    if !AppState::of(&app).sync.is_running() {
-        blocking(&app, |_, state| {
-            remote_store(&state.library, Cancel::new()).map(|_| ())
-        })
-        .await?;
+    // Check the sign-in and the folder before reserving a run, so that a
+    // missing one is reported at once. A run that is already going needs no
+    // check.
+    if AppState::of(&app).sync.is_running() {
+        return Ok(AppState::of(&app).sync.status());
     }
+    let remote_root = blocking(&app, |_, state| {
+        remote_store(&state.library, Cancel::new())?;
+        state.library.sync_folder()?.ok_or_else(|| {
+            BeverError::Invalid(
+                "choose first where this library is kept: a new folder, or the folder of a library that is there already".into(),
+            )
+        })
+    })
+    .await?;
     let state = AppState::of(&app);
     let Some((run_id, cancel)) = state.sync.begin() else {
         // Another caller won the race; report the run that is in progress.
@@ -245,8 +253,8 @@ async fn sync_now(app: AppHandle) -> Result<SyncStatus, String> {
         // For as long as the run goes, and no longer.
         let _awake = awake::Awake::hold();
         let options = SyncOptions {
+            remote_root,
             cancel: cancel.clone(),
-            ..SyncOptions::default()
         };
         let result = remote_store(&library, cancel).and_then(|remote| {
             sync_with_remote(&library, &*remote, &options, |progress: SyncProgress| {
@@ -456,6 +464,8 @@ pub fn run() {
             sync_status,
             stop_sync,
             sync_history,
+            sync_folder::look_at_sync_folder,
+            sync_folder::choose_sync_folder,
             finish_close,
             pcloud_auth::pcloud_status,
             pcloud_auth::connect_pcloud,
