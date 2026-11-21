@@ -1,0 +1,1 @@
+Discarding the changes to a note now also takes off the pictures and files added since it was opened: a sketch, a drawing on a picture, a pasted picture. Until now they stayed on the note, which was then sent to the other devices although nothing in it had changed. What was discarded is still kept under Note information, attachments included.

@@ -813,8 +813,13 @@ impl Library {
         let mut deleted = 0;
         for id in ids {
             {
-                let mut statement = transaction
-                    .prepare("SELECT sha256, alternate_sha256 FROM resources WHERE note_id = ?1")?;
+                // Those taken off the note, which its kept forms have, go
+                // with it too.
+                let mut statement = transaction.prepare(
+                    "SELECT sha256, alternate_sha256 FROM resources WHERE note_id = ?1
+                     UNION ALL
+                     SELECT sha256, alternate_sha256 FROM kept_resources WHERE note_id = ?1",
+                )?;
                 let mut rows = statement.query([id])?;
                 while let Some(row) = rows.next()? {
                     blobs.push(row.get::<_, String>(0)?);
@@ -836,17 +841,25 @@ impl Library {
         blobs.sort();
         blobs.dedup();
         for sha256 in blobs {
-            let referenced = connection
-                .prepare_cached(
-                    "SELECT 1 FROM resources WHERE sha256 = ?1 OR alternate_sha256 = ?1 LIMIT 1",
-                )?
-                .exists([&sha256])?;
-            if !referenced {
+            if !blob_referenced(&connection, &sha256)? {
                 self.remove_blob(&sha256)?;
             }
         }
         Ok(deleted)
     }
+}
+
+/// Whether an attachment's file is some note's: on it, or taken off it and
+/// had by a form kept of it.
+pub(crate) fn blob_referenced(connection: &Connection, sha256: &str) -> Result<bool> {
+    Ok(connection
+        .prepare_cached(
+            "SELECT 1 FROM resources WHERE sha256 = ?1 OR alternate_sha256 = ?1
+             UNION ALL
+             SELECT 1 FROM kept_resources WHERE sha256 = ?1 OR alternate_sha256 = ?1
+             LIMIT 1",
+        )?
+        .exists([sha256])?)
 }
 
 /// What the editor changes of a note, as it is to be stored.

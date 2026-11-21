@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.6.1 — 2026-11-21
+
+Discarding the changes to a note takes off the pictures and files added since it was opened. Until now they stayed on the note, which was then synchronized although nothing in it had changed.
+
+### Fixed
+
+- **A sketch, a drawing on a picture, or a picture or file put into a note stayed on the note when the changes were discarded.** Each of these is stored as an attachment of the note the moment it is made, before the note is saved with it in its text. **Discard changes** put the text back, which no longer showed the attachment, but left the attachment on the note. The note was then not what it had been: the next synchronization sent it to the other devices, with the attachment's file, where discarding a change to the text sends nothing. Discarding now takes off every attachment the note did not have when it was opened, and a note discarded back to what was synchronized is not sent.
+- **What was discarded is still kept, attachments included.** The note as it was before discarding is kept under **Note information**, as before; putting that version back puts its attachments on the note again. The same holds for every earlier version there: put back, the note has the attachments it had then, no more and no fewer.
+- An attachment taken off a note stays on the device while one of the note's five earlier versions has it. When the last of those goes, it is removed, and its file with it unless another note has the same file.
+
+### Compatibility
+
+- Nothing changes in how notes are kept in pCloud or synchronized. On the device, the library gains two tables, for the attachments an earlier version had and for those taken off a note; versions of Bever before this one leave them alone.
+- An earlier version kept by 1.6.0 or before does not say which attachments the note had. Putting it back leaves the note's attachments as they are, as until now.
+- An attachment that an earlier discard left on a note stays on it: it has been synchronized as part of the note, and nothing tells it from an attachment that was meant to stay.
+
+### Not changed
+
+- A drawing that is saved, not discarded, still leaves the picture as it was before the drawing on the note, beside the drawn one, and so does a picture deleted from a note's text: an attachment is taken off a note only by putting an earlier version back.
+
+### What was verified
+
+- **In tests of the Rust core:** an attachment added after the note was kept is off the note when that version is put back, out of the search, with its file still on the device; putting the discarded version back puts it on again, as it was; a note discarded back to what was synchronized, after an attachment was added, is not sent, makes no request beyond the two listings, and uploads no file, where the same test fails on 1.6.0; put back again, note and attachment are sent and reach the other device; an attachment is removed with its file when the last version that had it goes, a file another note has stays, and a note deleted for good takes what was taken off it along; a version kept before this release leaves attachments alone.
+- **In the built Windows application** (`npm run test:sync`): a picture is pasted into a note that was synchronized, the changes are discarded, and the next run sends no note and no file and makes two requests. The synchronization check passed (17 checks with an empty library, 16 with an export), and so did the general check (`npm run test:native`: 28 and 33).
+- **In the browser check:** a picture pasted into a note before anything else is changed makes **Discard changes** appear; discarding takes it out of the note, and putting the discarded version back shows it again.
+- Automated: 194 tests of the Rust core and 13 of its round trips through ENEX, 28 of the native shell, 275 of the interface, and the browser check. `cargo audit` and `npm audit` find no vulnerability.
+- The Windows program and the Android package were built from the released source.
+
+### Not verified
+
+- **On a phone.** The change is in the core and in the editor, which are the same on Android; it was not run there.
+- **A sketch and a drawing on a picture themselves.** The checks put a picture in by pasting. All three reach the note by the same one step in the editor (`attachBlob`), which is what was changed.
+- The Windows installers were built, not run.
+
 ## 1.6.0 — 2026-11-20
 
 A library is kept in a pCloud folder you choose, so that one pCloud account can hold several libraries that never mix: yours and another person's, each in a folder of its own. A device either starts a new library or joins one that is there.

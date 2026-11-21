@@ -186,23 +186,46 @@ function NoteEditor({ note, onBack, focused, onToggleFocus }: WorkspaceProps & {
     }
   };
 
+  /**
+   * Makes ready for adding to the note's attachments. What is typed is
+   * stored first, and the note is kept as it then is, as before a save:
+   * an attachment is the note's from the moment it is added, and discarding
+   * the changes takes off what the kept note had not. Resolves to what to
+   * call when nothing was added after all, so that a note nothing was done
+   * to has nothing to discard.
+   */
+  const beforeAttaching = useCallback(async () => {
+    await controller.flush();
+    const kept = await controller.begin();
+    return () => {
+      if (kept && controller.unbegin()) setKeptVersion(null);
+    };
+  }, [controller]);
+
   const attachFiles = useCallback(async (): Promise<Resource[]> => {
     try {
-      await controller.flush();
-      const resources = await api.attachFiles(note.id);
+      const nothingAdded = await beforeAttaching();
+      const resources = await api.attachFiles(note.id).catch((error: unknown) => {
+        nothingAdded();
+        throw error;
+      });
       if (resources.length) adopt(await api.getNote(note.id));
+      else nothingAdded();
       return resources;
     } catch (error) {
       showError(error);
       return [];
     }
-  }, [adopt, controller, note.id, showError]);
+  }, [adopt, beforeAttaching, note.id, showError]);
 
   const attachBlob = useCallback(
     async (file: Blob, fileName: string): Promise<Resource | null> => {
       try {
-        await controller.flush();
-        const resource = await api.attachBlob(note.id, file, fileName);
+        const nothingAdded = await beforeAttaching();
+        const resource = await api.attachBlob(note.id, file, fileName).catch((error: unknown) => {
+          nothingAdded();
+          throw error;
+        });
         adopt(await api.getNote(note.id));
         return resource;
       } catch (error) {
@@ -210,7 +233,7 @@ function NoteEditor({ note, onBack, focused, onToggleFocus }: WorkspaceProps & {
         return null;
       }
     },
-    [adopt, controller, note.id, showError],
+    [adopt, beforeAttaching, note.id, showError],
   );
 
   // The forms kept of the note are listed with its information.

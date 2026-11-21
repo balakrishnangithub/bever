@@ -1098,6 +1098,8 @@ function keepVersion(note: Note): number | null {
     newest &&
     newest.note.title === note.title &&
     newest.note.contentHtml === note.contentHtml &&
+    newest.note.resources.map((resource) => resource.id).join() ===
+      note.resources.map((resource) => resource.id).join() &&
     JSON.stringify(newest.note.tags) === JSON.stringify(note.tags) &&
     JSON.stringify(newest.note.attributes) === JSON.stringify(note.attributes)
   )
@@ -1711,6 +1713,8 @@ export const browserApi: BeverApi = {
       plainText: kept.note.plainText,
       attributes: kept.note.attributes,
       tags: kept.note.tags,
+      // The attachments it had: one added since is off the note again.
+      resources: kept.note.resources,
       updatedAt: kept.note.updatedAt,
       revision: now.revision + 1,
     };

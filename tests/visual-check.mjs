@@ -2833,6 +2833,22 @@ try {
     await expect(ways.locator('.editor-toolbar')).toBeVisible();
     const discard = ways.getByRole('button', { name: 'Discard changes' });
     await expect(discard).toHaveCount(0);
+    // A picture put into the note is the note's from that moment, before
+    // anything is saved: the note is kept as it was before that too.
+    const pictures = ways.locator('.note-prose .attachment-image img');
+    const picturesBefore = await pictures.count();
+    await ways.locator('.note-prose').evaluate((element) => {
+      const pixel =
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+      const bytes = Uint8Array.from(atob(pixel), (character) => character.charCodeAt(0));
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([bytes], 'put-in-by-mistake.png', { type: 'image/png' }));
+      element.dispatchEvent(
+        new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }),
+      );
+    });
+    await expect(pictures).toHaveCount(picturesBefore + 1);
+    await expect(discard).toBeVisible();
     await titleField.fill('Welcome to Bever, spoilt');
     await ways.locator('.note-prose').click();
     await ways.keyboard.type('typed by mistake ');
@@ -2847,6 +2863,8 @@ try {
     expect(await ways.locator('.note-prose').innerText()).toBe(proseBefore);
     await expect(ways.getByRole('heading', { name: 'Welcome to Bever', exact: true })).toBeVisible();
     await expect(discard).toHaveCount(0);
+    // The picture went with the changes.
+    await expect(pictures).toHaveCount(picturesBefore);
     // What was discarded is kept, and can be put back.
     await ways.getByRole('button', { name: 'Note information' }).click();
     const earlier = ways.getByRole('region', { name: 'Earlier versions' });
@@ -2860,6 +2878,8 @@ try {
       .click();
     await expect(titleField).toHaveValue('Welcome to Bever, spoilt');
     await expect(ways.locator('.note-prose')).toContainText('typed by mistake');
+    // And came back with them.
+    await expect(pictures).toHaveCount(picturesBefore + 1);
     await ways.getByRole('button', { name: 'Close note information' }).click();
 
     // A note put out of sight stops playing. Something that plays is put

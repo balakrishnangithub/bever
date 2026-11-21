@@ -504,6 +504,57 @@ try {
 
   await page.screenshot({ path: join(root, 'test-results/native-sync-complete.png') });
 
+  // --- A picture added to a note and then discarded is not sent -------------
+  // A sketch, a drawing on a picture and a pasted picture are each stored
+  // as an attachment of the note the moment they are made, before the note
+  // is saved with them in it. Discarding the changes takes them off again.
+  await settings.getByRole('button', { name: 'Close settings' }).click();
+  await newNote(page, 'A picture thought better of');
+  ({ settings, syncNow, stop, runs } = await openSettings(page));
+  expectSent(await finishRun(page, syncNow), 1);
+  expectedNotes += 1;
+  expect(notesThere()).toBe(expectedNotes);
+  await settings.getByRole('button', { name: 'Close settings' }).click();
+  // Opened anew: a note just made had nothing in it to go back to.
+  const listed = page.locator('.note-list').getByRole('heading');
+  await listed
+    .filter({ hasText: /^! Sync note/ })
+    .first()
+    .click();
+  await expect(page.getByLabel('Note title')).toHaveValue(/^! Sync note/);
+  await listed.filter({ hasText: 'A picture thought better of' }).click();
+  await expect(page.getByLabel('Note title')).toHaveValue('A picture thought better of');
+  await expect(page.locator('.discard-changes')).toHaveCount(0);
+  await page.locator('.note-prose').evaluate((element) => {
+    const pixel =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    const bytes = Uint8Array.from(atob(pixel), (character) => character.charCodeAt(0));
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([bytes], 'thought-better-of.png', { type: 'image/png' }));
+    element.dispatchEvent(
+      new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }),
+    );
+  });
+  const picture = page.locator('.note-prose .attachment-image img');
+  await expect(picture).toHaveCount(1, { timeout: 15000 });
+  await expect(page.getByText('Saved locally', { exact: true })).toBeVisible({ timeout: 15000 });
+  await page.getByRole('button', { name: 'Discard changes' }).click();
+  await page
+    .getByRole('dialog', { name: 'Discard the changes?' })
+    .getByRole('button', { name: 'Discard changes' })
+    .click();
+  await expect(picture).toHaveCount(0);
+  await expect(page.getByLabel('Note title')).toHaveValue('A picture thought better of');
+  ({ settings, syncNow, stop, runs } = await openSettings(page));
+  const attachmentsBefore = attachmentsThere();
+  const askedBefore = remote.requests;
+  const afterDiscarding = await finishRun(page, syncNow);
+  expectSent(afterDiscarding, 0);
+  expect(afterDiscarding.blobsUploaded).toBe(0);
+  expect(attachmentsThere()).toBe(attachmentsBefore);
+  if (!real) expect(remote.requests - askedBefore).toBe(2);
+  check('a picture added to a note and then discarded is not sent, and neither is the note');
+
   // --- A run that pCloud refuses says why, and the next one finishes --------
   await settings.getByRole('button', { name: 'Close settings' }).click();
   await newNote(page, 'Written while the storage was full');

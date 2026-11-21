@@ -300,6 +300,56 @@ fn a_change_that_was_discarded_is_not_sent() {
 }
 
 #[test]
+fn a_discarded_change_that_added_an_attachment_is_not_sent() {
+    let remote = MemoryRemote::new();
+    let (first, second) = (Device::new(), Device::new());
+    let id = first.add("Picture", "Body", &[]);
+    first
+        .library
+        .add_resource(&id, &mut &b"picture"[..], "picture.png", None)
+        .unwrap();
+    first.sync(&remote);
+    second.sync(&remote);
+    first.sync(&remote);
+    remote.take_uploads();
+    let synced = first.note(&id);
+
+    // Drawn on, which adds the picture with the drawing to the note, and
+    // then discarded.
+    let kept = first.library.keep_note_version(&id).unwrap().unwrap();
+    first
+        .library
+        .add_resource(&id, &mut &b"picture, drawn on"[..], "drawn.png", None)
+        .unwrap();
+    first.edit(&id, "Picture", "Body, drawn on", &[]);
+    let restored = first.library.restore_note_version(&id, kept).unwrap();
+    assert_eq!(essence(&restored), essence(&synced));
+
+    let before = remote.requests();
+    let report = first.sync(&remote);
+    assert_eq!(
+        (report.pushed, report.blobs_uploaded, report.pulled),
+        (0, 0, 0)
+    );
+    assert_eq!(
+        remote.requests() - before,
+        2,
+        "the two listings, and no transfer"
+    );
+    assert!(remote.take_uploads().is_empty());
+    assert_eq!(first.sync(&remote).pushed, 0);
+
+    // What was discarded is put back: the note is sent, with the attachment.
+    let spoilt = first.library.note_versions(&id).unwrap()[0].id;
+    first.library.restore_note_version(&id, spoilt).unwrap();
+    let report = first.sync(&remote);
+    assert_eq!((report.pushed, report.blobs_uploaded), (1, 1));
+    assert_eq!(second.sync(&remote).pulled, 1);
+    assert_eq!(essence(&second.note(&id)), essence(&first.note(&id)));
+    assert_eq!(second.note(&id).resources.len(), 2);
+}
+
+#[test]
 fn notes_are_uploaded_together() {
     let remote = MemoryRemote::new();
     let (first, second) = (Device::new(), Device::new());

@@ -311,6 +311,40 @@ describe('DraftController', () => {
     expect(backend.saves.at(-1)?.baseRevision).toBe(9);
   });
 
+  it('lets the note be kept before the editor changes it by other means than saving', async () => {
+    const backend = library();
+    const keep = vi.fn().mockResolvedValue(1);
+    const controller = new DraftController(note(), backend.persist, 650, keep);
+    // Asked twice at once, as for two files dropped together: kept once.
+    expect(await Promise.all([controller.begin(), controller.begin()])).toEqual([true, true]);
+    expect(await controller.begin()).toBe(false);
+    controller.adopt(note({ revision: 6 }));
+    controller.update('title', 'a');
+    await controller.flush();
+    expect(keep).toHaveBeenCalledTimes(1);
+    expect(backend.saves).toHaveLength(1);
+  });
+
+  it('keeps the note at the first save when nothing came of what it was kept for', async () => {
+    const backend = library();
+    const keep = vi.fn().mockResolvedValue(1);
+    const controller = new DraftController(note(), backend.persist, 650, keep);
+    // Nothing to take back where nothing was begun.
+    expect(controller.unbegin()).toBe(false);
+    expect(await controller.begin()).toBe(true);
+    expect(controller.unbegin()).toBe(true);
+    controller.update('title', 'a');
+    await controller.flush();
+    expect(keep).toHaveBeenCalledTimes(2);
+
+    // Something was saved since: the visit has begun, whatever else failed.
+    expect(await controller.begin()).toBe(false);
+    expect(controller.unbegin()).toBe(false);
+    controller.update('title', 'ab');
+    await controller.flush();
+    expect(keep).toHaveBeenCalledTimes(2);
+  });
+
   it('saves all the same when the note could not be kept, and tries again', async () => {
     const backend = library();
     const keep = vi.fn().mockRejectedValueOnce(new Error('disk')).mockResolvedValue(1);

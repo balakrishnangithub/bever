@@ -45,7 +45,7 @@ Bever is an independent project. It is not affiliated with, endorsed by, or spon
 - Going back (Android's Back, a mouse's button for it) closes what was opened last, one thing for one step: a menu, a dialog, a panel, a preview, the editor of a picture, the drawer. With nothing open it goes back to where you were: from a note to its list, from a search to the notebook whole, from the notebook to where it was chosen. From the first place it leaves the application.
 - A note is stored anew only when it was changed. Placing and moving the cursor, a letter typed and taken away again, or a keyboard that takes up a word and puts it back leave the note as it is, to its date.
 - Automatic saving. If a note changes underneath an open editor, your version is kept beside it as a conflict copy.
-- A guard against changing a note by mistake: the padlock makes a note read-only; **Discard changes** puts it back as it was when you opened it; and the last five earlier versions of a note are kept on the device, under **Note information**, to be put back. Notes can be made to open read-only.
+- A guard against changing a note by mistake: the padlock makes a note read-only; **Discard changes** puts it back as it was when you opened it, without the pictures and files added since; and the last five earlier versions of a note are kept on the device, under **Note information**, to be put back. Notes can be made to open read-only.
 - A click on a link while writing offers to open, edit, copy, or remove it; Ctrl+click opens it at once.
 - Editable created and updated dates, source URL, and author.
 

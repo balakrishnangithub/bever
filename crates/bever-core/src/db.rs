@@ -135,6 +135,35 @@ CREATE TABLE IF NOT EXISTS note_versions (
     updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS note_versions_note ON note_versions(note_id, id);
+-- The attachments the note had when a form of it was kept, by their
+-- identifiers. A form kept before these were recorded (up to 1.6.0) has no
+-- row here, and putting it back leaves the note's attachments as they are.
+CREATE TABLE IF NOT EXISTS note_version_resources (
+    version_id INTEGER PRIMARY KEY REFERENCES note_versions(id) ON DELETE CASCADE,
+    resources_json TEXT NOT NULL
+);
+-- An attachment taken off its note because a form was put back that had not
+-- got it. A form kept of the note has it, and putting that form back puts
+-- the attachment on the note again. The columns are those of `resources`.
+CREATE TABLE IF NOT EXISTS kept_resources (
+    id TEXT PRIMARY KEY,
+    note_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+    sha256 TEXT NOT NULL,
+    md5 TEXT NOT NULL,
+    mime TEXT NOT NULL,
+    file_name TEXT,
+    size INTEGER NOT NULL,
+    width INTEGER,
+    height INTEGER,
+    duration INTEGER,
+    recognition_xml TEXT,
+    recognition_text TEXT,
+    attributes_json TEXT NOT NULL DEFAULT '{}',
+    alternate_sha256 TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
+    ocr_state INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS kept_resources_note ON kept_resources(note_id);
 "#;
 
 /// The search index. What is short comes before the note's text, so that it

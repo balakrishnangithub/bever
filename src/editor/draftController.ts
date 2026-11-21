@@ -65,7 +65,8 @@ const sameDraft = (one: Draft, other: Draft) => FIELDS.every((key) => same(key, 
  *   meantime is recognised and kept instead of being overwritten.
  * - `flush()` saves at once; it is called before the note is left.
  * - Before the first save, the application is given the chance to keep the
- *   note as it was (`beforeFirstSave`).
+ *   note as it was (`beforeFirstSave`). So it is before the editor changes
+ *   the stored note by other means than saving (`begin()`).
  *
  * It lives outside React so that these rules do not depend on render timing.
  */
@@ -80,6 +81,10 @@ export class DraftController {
   private timer: ReturnType<typeof setTimeout> | undefined;
   /** Whether what precedes the first save has been done. */
   private begun = false;
+  /** What precedes the first save, while it is being done. */
+  private beginning: Promise<boolean> | null = null;
+  /** Whether anything was saved since what precedes the first save. */
+  private savedSince = false;
 
   /**
    * `beforeFirstSave` runs once, before the first save: the application
@@ -179,12 +184,49 @@ export class DraftController {
     this.base = draftOf(note);
     // What follows is a new beginning, with its own first save.
     this.begun = false;
+    this.savedSince = false;
     this.set({
       draft: this.base,
       dirty: false,
       saveState: 'saved',
       contentVersion: this.snapshot.contentVersion + 1,
     });
+  }
+
+  /**
+   * Does what precedes the first save, unless it is done. The editor calls
+   * this before it changes the stored note by other means than saving, as
+   * by adding an attachment: the note is to be kept as it was before that
+   * too, or what is kept would have the attachment already. Resolves to
+   * whether it was done now. When it fails it is tried again the next time.
+   */
+  begin(): Promise<boolean> {
+    if (this.begun || !this.beforeFirstSave) return Promise.resolve(false);
+    this.beginning ??= this.beforeFirstSave()
+      .then(
+        () => {
+          this.begun = true;
+          this.savedSince = false;
+          return true;
+        },
+        () => false,
+      )
+      .finally(() => {
+        this.beginning = null;
+      });
+    return this.beginning;
+  }
+
+  /**
+   * Nothing came of what `begin()` was called for: no file was chosen, or
+   * it could not be added. Unless something was saved meanwhile, the first
+   * save is then still to come, with what precedes it. Returns whether it
+   * is.
+   */
+  unbegin(): boolean {
+    if (!this.begun || this.savedSince) return false;
+    this.begun = false;
+    return true;
   }
 
   /** Saves pending edits now. Resolves once nothing typed so far is unsaved. */
@@ -196,16 +238,7 @@ export class DraftController {
     const sent = this.snapshot.draft;
     const input: SaveNote = { id: this.noteId, ...sent, baseRevision: this.baseRevision };
     this.set({ saveState: 'saving' });
-    const ready =
-      this.begun || !this.beforeFirstSave
-        ? Promise.resolve()
-        : this.beforeFirstSave().then(
-            () => {
-              this.begun = true;
-            },
-            () => undefined,
-          );
-    const save = ready
+    const save = this.begin()
       .then(() =>
         this.persist(input, (stored) => {
           this.baseRevision = stored.revision;
@@ -216,6 +249,7 @@ export class DraftController {
           // What was sent is what is stored now. Edits made during the
           // save keep the draft unsaved for the next one.
           this.base = sent;
+          this.savedSince = true;
           const dirty = !sameDraft(this.snapshot.draft, sent);
           this.set(dirty ? { dirty } : { dirty, saveState: 'saved' });
         },
